@@ -1,0 +1,12 @@
+name: Lấy mã nhóm Telegram
+on: {workflow_dispatch: {}}
+jobs:
+  chats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install pandas numpy matplotlib
+      - env: {TELEGRAM_TOKEN: "${{ secrets.TELEGRAM_TOKEN }}"}
+        run: python f8_alert.py --chats

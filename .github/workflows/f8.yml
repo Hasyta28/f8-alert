@@ -16,8 +16,12 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CHAT_4H: ${{ vars.CHAT_4H }}
+          CHAT_1H: ${{ vars.CHAT_1H }}
+          CHAT_PAPER: ${{ vars.CHAT_PAPER }}
+          PAPER_START: ${{ vars.PAPER_START || '2026-11-23' }}
+          VOL_MULTI: ${{ vars.VOL_MULTI || '100' }}
           VON: ${{ vars.VON || '1000' }}
           VOL_1H: ${{ vars.VOL_1H || '200' }}
-          PAPER_START: ${{ vars.PAPER_START || '2026-11-23' }}
           STATUS: ${{ (github.event_name == 'workflow_dispatch' || github.event.schedule == '3 0 * * *') && '1' || '0' }}
         run: python f8_alert.py

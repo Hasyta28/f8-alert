@@ -52,7 +52,7 @@ def f8_sig(I,i,s):
     rk,addr=(0.04,0) if sc<=4 else (0.12,5)
     if late==2: rk,addr=rk/2,0
     elif late==0: rk*=1.5
-    e200=I["e200"]; ep=o[i+1]; sp=(min(e200[i],l[i])-a[i]) if s==1 else (max(e200[i],h[i])+a[i])
+    e200=I["e200"]; ep=o[i+1] if i+1<len(o) else c[i]; sp=(min(e200[i],l[i])-a[i]) if s==1 else (max(e200[i],h[i])+a[i])
     d=min(abs(ep-sp)/ep,0.12)
     return dict(sc=sc,late=late,rk=rk,addr=addr,d=d)
 def engulf(o,c,j,s): return (s==1 and c[j]>o[j] and c[j]>=o[j-1] and o[j]<=c[j-1] and c[j-1]<o[j-1]) or (s==-1 and c[j]<o[j] and c[j]<=o[j-1] and o[j]>=c[j-1] and c[j-1]>o[j-1])
@@ -87,12 +87,17 @@ def f8_trade(I,i,s,addr):
     return dict(open=False,j=j,legs=legs,why=why,ret=ret,xp=xp,sp0=sp0,hp=hp,ev=ev)
 def f8_book(I,start_i,eq0=1000.0):
     eq=eq0; T=[]; last=-1; i=max(start_i,300); n=I["n"]
-    while i<n-1:
+    while i<n:
         for s in (1,-1):
             g=f8_sig(I,i,s)
             if g: break
         if not g or i<=last: i+=1; continue
-        tot=min(5,g["rk"]/g["d"]); bf=tot/(1+g["addr"]); r=f8_trade(I,i,s,g["addr"])
+        tot=min(5,g["rk"]/g["d"]); bf=tot/(1+g["addr"])
+        if i==n-1:   # tín hiệu ở nến vừa đóng: lệnh chờ vào ở giá mở nến kế tiếp
+            c=I["c"][i]; sp=(min(I["e200"][i],I["l"][i])-I["a"][i]) if s==1 else (max(I["e200"][i],I["h"][i])+I["a"][i])
+            sp=max(sp,c*0.88) if s==1 else min(sp,c*1.12)
+            T.append(dict(i=i,s=s,sig=g,bf=bf,tot=tot,eq0=eq,pnl=0.0,open=True,pending=True,j=i,legs=[(c,1.0)],sp=sp,sp0=sp,ret=0.0,ev=[],trailing=False)); break
+        r=f8_trade(I,i,s,g["addr"])
         eqb=eq; pnl=bf*r["ret"]*eq
         T.append(dict(i=i,s=s,sig=g,bf=bf,tot=tot,eq0=eqb,pnl=pnl,**r))
         if r["open"]: break
@@ -112,10 +117,14 @@ def h1_book(H,A4,start_i,vol=200.0):
     idx=np.searchsorted(A4.tc.values,H.tc.values,side="right")-1
     htr=np.where(idx>=0,tr4[np.maximum(idx,0)],0); hage=np.where(idx>=0,age[np.maximum(idx,0)],999)
     T=[]; i=max(start_i,300); tot=0.0
-    while i<n-1:
+    while i<n:
         d=1 if (up[i] and not up[i-1]) else -1 if (dn[i] and not dn[i-1]) else 0
         if d==0 or nar[i]!=1 or htr[i]!=d or hage[i]>=100: i+=1; continue
-        ep=o[i+1]*(1+SLIP*d); sp=(lo[i]-a[i]) if d==1 else (hi[i]+a[i])
+        sp=(lo[i]-a[i]) if d==1 else (hi[i]+a[i])
+        if i==n-1:   # tín hiệu ở nến vừa đóng: vào ở giá mở nến kế tiếp (≈ giá đóng hiện tại)
+            if d*(c[i]-sp)>0: T.append(dict(i=i,s=d,ep=c[i],sp=sp,open=True,pending=True,j=i,usd=0.0))
+            break
+        ep=o[i+1]*(1+SLIP*d)
         if d*(ep-sp)<=0: i+=1; continue
         j=i+1; xp=None; why=None
         while j<n:

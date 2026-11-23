@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """F8 – AAVE 4h: kiểm tra kèo mỗi khi nến 4h đóng và báo qua Telegram.
 Chỉ đọc giá công khai (data-api.binance.vision, giá spot AAVEUSDT/BTCUSDT). Không API key, không đặt lệnh.
-Biến môi trường: TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, VON (vốn USD, mặc định 1000), STATUS=1 để luôn gửi trạng thái."""
+Biến môi trường: TELEGRAM_TOKEN, TELEGRAM_CHAT_ID (mặc định), CHAT_4H / CHAT_1H / CHAT_PAPER (nhóm riêng, tùy chọn), VON (vốn USD, mặc định 1000), STATUS=1 để luôn gửi trạng thái."""
 import os, json, urllib.request, urllib.parse, datetime as dt
 import numpy as np, pandas as pd
 ema=lambda x,n: pd.Series(x).ewm(span=n,adjust=False).mean().values
@@ -244,8 +244,11 @@ def tg(method,data,files=None):
         body+=f"--{bd}--\r\n".encode(); req=urllib.request.Request(url,data=body,headers={"Content-Type":f"multipart/form-data; boundary={bd}"})
     else: req=urllib.request.Request(url,data=urllib.parse.urlencode(data).encode())
     return json.loads(urllib.request.urlopen(req,timeout=60).read())
+CH_ENV={"4h":"CHAT_4H","1h":"CHAT_1H","paper":"CHAT_PAPER","multi":"CHAT_PAPER"}
+def chat_for(ch):   # mỗi loại tin một nhóm riêng; chưa đặt thì gửi về chat mặc định
+    return (os.environ.get(CH_ENV.get(ch,""),"") or "").strip() or os.environ.get("TELEGRAM_CHAT_ID")
 def send_post(p):
-    tok,cid=os.environ.get("TELEGRAM_TOKEN"),os.environ.get("TELEGRAM_CHAT_ID")
+    tok,cid=os.environ.get("TELEGRAM_TOKEN"),chat_for(p.get("ch","4h"))
     if not (tok and cid):
         print(p.get("caption") or "", "\n", p.get("text") or "")
         if p.get("photo") and os.environ.get("SAVE_PNG"): open(os.environ["SAVE_PNG"]+f"_{abs(hash(p['caption']))%1000}.png","wb").write(p["photo"])
@@ -258,15 +261,26 @@ if __name__=="__main__":
     import sys
     von=float(os.environ.get("VON","1000")); vol1=float(os.environ.get("VOL_1H","200")); status=os.environ.get("STATUS")=="1"
     A4=klines("AAVEUSDT"); B4=klines("BTCUSDT"); H1=klines("AAVEUSDT","1h")
+    if "--chats" in sys.argv:   # liệt kê các nhóm bot đã được thêm vào (để lấy chat id)
+        seen={}
+        for u in tg("getUpdates",{"allowed_updates":'["message","my_chat_member","channel_post"]'}).get("result",[]):
+            for k in ("message","my_chat_member","channel_post"):
+                c=(u.get(k) or {}).get("chat")
+                if c: seen[c["id"]]=c.get("title") or c.get("username") or c.get("first_name")
+        for i,t in seen.items(): print(i,t)
+        sys.exit()
     if "--test" in sys.argv:   # mô phỏng tin kèo trên dữ liệu thật (ép bật tín hiệu) để xem mẫu
         res,_=evaluate(A4,B4,von); r=[x for x in res if x["trend"]] or res; r[0]["ok"]=True
         for p in f8_posts([r[0]],A4,von,False): p["caption"]="🧪 <b>TIN MẪU – KHÔNG PHẢI KÈO THẬT</b>\n"+p["caption"]; send_post(p)
         sys.exit()
     now=dt.datetime.now(dt.timezone.utc).timestamp()*1000
     res,_=evaluate(A4,B4,von); fresh4=now-A4.tc.iloc[-1]<3600*1000
-    posts=f8_posts(res,A4,von,status) if (fresh4 or status) else []
-    posts+=h1_posts(H1,A4,vol1,status)
-    try: posts+=paper_posts(fresh4,status)
+    posts=[dict(p,ch="4h") for p in (f8_posts(res,A4,von,status) if (fresh4 or status) else [])]
+    posts+=[dict(p,ch="1h") for p in h1_posts(H1,A4,vol1,status)]
+    try: posts+=[dict(p,ch="paper") for p in paper_posts(fresh4,status)]
     except Exception as e: print("paper lỗi:",e)
+    try:
+        import multi; posts+=[dict(p,ch="multi") for p in multi.multi_posts(status)]
+    except Exception as e: print("multi lỗi:",e)
     for p in posts: send_post(p)
     if not posts: print("Chưa có kèo.")
