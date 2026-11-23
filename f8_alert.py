@@ -52,27 +52,91 @@ def evaluate(A,B,von=1000.0):
             tot=min(5,rk/d)*von; plans.append((scx,dict(rk=rk,add=add,tot=tot,leg1=tot/(1+add),leg2=tot*add/(1+add),hist=HIST.get(("3-4" if scx<=4 else "5-7",nl)))))
         info["plans"]=plans; info["ok"]=sig and f1 and f2 and nl<3; out.append(info)
     return out, A.tc.iloc[-1]
+
+# ===================== TRÌNH BÀY TIN NHẮN =====================
+import io, html
+VN=pd.Timedelta(hours=7)
 def fmt(x): return f"{x:,.2f}"
-def message(res,tc,von):
-    t=(pd.to_datetime(tc,unit="ms")+pd.Timedelta(hours=7)).strftime("%d/%m %H:%M")
-    lines=[]
+def tvn(ms): return (pd.to_datetime(ms,unit="ms")+VN).strftime("%d/%m %H:%M")
+SEP="━━━━━━━━━━━━━━━━━━"
+def chart(df,title,levels,mark=None,n=90,zone=None):
+    """Ảnh nến + EMA + các mức giá. levels: list (giá, nhãn, màu, kiểu)."""
+    import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+    d=df.iloc[-n:].reset_index(drop=True); c=df.c.values
+    E={k:ema(c,k)[-n:] for k in (20,50,100,200)}
+    bg,fg,grid="#0f1419","#d0d4da","#232a33"
+    fig,ax=plt.subplots(figsize=(10,5.6),dpi=110); fig.patch.set_facecolor(bg); ax.set_facecolor(bg)
+    x=np.arange(len(d)); up=d.c>=d.o
+    ax.vlines(x,d.l,d.h,color=np.where(up,"#26a69a","#ef5350"),lw=1)
+    ax.bar(x,(d.c-d.o).abs().clip(lower=(d.h-d.l).max()*0.004),bottom=np.minimum(d.o,d.c),color=np.where(up,"#26a69a","#ef5350"),width=0.7)
+    for k,col in ((20,"#f5c542"),(50,"#42a5f5"),(100,"#ab47bc"),(200,"#9e9e9e")): ax.plot(x,E[k],color=col,lw=1.3,label=f"EMA{k}")
+    N=len(d); x0=N+1; x1=N+16
+    if zone: ax.axhspan(zone[0],zone[1],color="#42a5f5",alpha=0.12); ax.text(N-1,zone[1],"vùng chờ  ",color="#90caf9",fontsize=9,va="bottom",ha="right")
+    lv={lab:p for p,lab,*_ in levels}
+    if "Entry" in lv and "SL" in lv:   # hộp rủi ro / mục tiêu kiểu TradingView
+        ax.fill_between([x0,x1],lv["Entry"],lv["SL"],color="#ef5350",alpha=0.18,lw=0)
+        tgt=lv.get("1R")
+        if tgt is not None: ax.fill_between([x0,x1],lv["Entry"],tgt,color="#26a69a",alpha=0.18,lw=0)
+    for p,lab,col,ls in levels:
+        ax.hlines(p,N-20,x1,colors=col,linestyles=ls,lw=1.4)
+        ax.text(x1+0.6,p,f"{lab}  {fmt(p)}",color=col,fontsize=9.5,va="center",fontweight="bold",
+                bbox=dict(boxstyle="round,pad=0.25",fc=bg,ec=col,lw=0.8))
+    if mark:
+        side_up=lv.get("SL",d.c.iloc[-1])<d.c.iloc[-1]
+        yy=d.l.iloc[-1]-(d.h.max()-d.l.min())*0.03 if side_up else d.h.iloc[-1]+(d.h.max()-d.l.min())*0.03
+        ax.scatter([N-1],[yy],marker="^" if side_up else "v",s=110,color="#ffffff",zorder=5)
+        ax.text(N-1,yy,("\n\n" if side_up else "")+"tín hiệu"+("" if side_up else "\n\n"),color="#ffffff",fontsize=8.5,ha="center",va="top" if side_up else "bottom")
+    ax.set_xlim(-1,x1+17)
+    lo=min([d.l.min()]+[p for p,*_ in levels]); hi=max([d.h.max()]+[p for p,*_ in levels])
+    ax.set_ylim(lo-(hi-lo)*0.06,hi+(hi-lo)*0.08)
+    ticks=list(range(0,N,max(1,N//6))); ax.set_xticks(ticks); ax.set_xticklabels([(pd.to_datetime(d.t.iloc[k],unit="ms")+VN).strftime("%d/%m %Hh") for k in ticks],color=fg,fontsize=8)
+    ax.tick_params(colors=fg,labelsize=8)
+    for sp_ in ax.spines.values(): sp_.set_color(grid)
+    ax.grid(color=grid,lw=0.6); ax.legend(loc="upper left",fontsize=8,facecolor=bg,edgecolor=grid,labelcolor=fg,ncol=4)
+    fig.text(0.99,0.015,"F8 · AAVE · tín hiệu tham khảo",color="#5c6670",fontsize=8,ha="right")
+    ax.set_title(title,color=fg,fontsize=12,loc="left",fontweight="bold")
+    fig.tight_layout(); b=io.BytesIO(); fig.savefig(b,format="png",facecolor=bg); plt.close(fig); return b.getvalue()
+
+def f8_posts(res,A4,von,status):
+    tc=A4.tc.iloc[-1]; t=tvn(tc); posts=[]
     for r in res:
         if not r["ok"]: continue
-        lines.append(f"🔔 KÈO F8 {r['side']} AAVE – nến 4h đóng {t} (giờ VN)")
-        lines.append(f"Entry: ~{fmt(r['ep'])} (giá mở nến kế tiếp)\nSL (cắt khi NẾN 4H ĐÓNG qua): {fmt(r['sp'])} ({r['d']*100:.1f}%)\nSL cứng đặt trên sàn: {fmt(r['hard'])}\nMốc 1R: {fmt(r['tp'])}")
-        lines.append(f"Điểm tự động {r['auto']}/5 + tự kiểm tra trên Binance: Long/Short ratio <1.5? funding TB thị trường <0.04%?\nDấu hiệu cuối sóng: {r['late']}/4 | tuổi xu hướng {r['age']} nến")
+        L=r["side"]=="LONG"; icon="🟢" if L else "🔴"; dirw="LONG" if L else "SHORT"
+        cap=(f"{icon} <b>KÈO {dirw} · AAVE/USDT · 4H</b>  <i>(F8)</i>\n🕒 Nến đóng {t} (giờ VN)\n{SEP}\n"
+             f"📍 <b>Entry</b>      <code>{fmt(r['ep'])}</code>  <i>(giá mở nến kế tiếp)</i>\n"
+             f"🛑 <b>SL</b>           <code>{fmt(r['sp'])}</code>  <i>(cách {r['d']*100:.1f}%, cắt khi nến 4H đóng qua)</i>\n"
+             f"⛔ <b>SL cứng</b>   <code>{fmt(r['hard'])}</code>  <i>(đặt sẵn trên sàn)</i>\n"
+             f"🎯 <b>Mốc 1R</b>   <code>{fmt(r['tp'])}</code>\n{SEP}\n"
+             f"📊 Điểm tự động <b>{r['auto']}/5</b> · Cuối sóng <b>{r['late']}/4</b> · Tuổi xu hướng {r['age']} nến")
+        lv=[(r['tp'],"1R","#66bb6a","-"),(r['ep'],"Entry","#ffffff","-"),(r['sp'],"SL","#ef5350","--"),(r['hard'],"SL cứng","#b71c1c",":")]
+        if any(p and p["add"] for _,p in r["plans"]): lv.append((r['e100'],"Nhồi (EMA100)","#ffa726","-."))
+        img=chart(A4,f"AAVE/USDT 4H · {dirw} · {t}",lv,mark=True)
+        rows=[]; seen={}; seen_s={}
         for scx,p in r["plans"]:
-            if p is None: lines.append(f"• Nếu tổng điểm {scx}: BỎ QUA"); continue
-            hs=p["hist"]; hstr=f" | lịch sử: {hs[0]} lệnh, thắng {hs[1]}%, TB {hs[2]:+.1f}% vốn, tệ nhất {hs[3]}%" if hs else ""
-            add=f", chân 1 {p['leg1']:,.0f}$ + treo nhồi {p['leg2']:,.0f}$ ở EMA100 {fmt(r['e100'])}" if p["add"] else ""
-            lines.append(f"• Nếu tổng điểm {scx}: rủi ro {p['rk']*100:.0f}% vốn → tổng vol {p['tot']:,.0f}${add}{hstr}")
-        lines.append("Tại 1R: giá đóng cùng phía EMA20 + BTC cùng phía EMA20 BTC + RSI>60 (short <40) → dời SL lên +0.5R và gồng 2.5 ATR; không thì chốt hết.\nChốt sớm: lãi ≥0.3R mà có nến nhấn chìm ngược hoặc đóng ngược qua EMA20.\nBạn tự quyết định. Đây không phải lệnh tự động.")
-    if not lines and os.environ.get("STATUS")=="1":
-        for r in res:
-            if r["trend"]: lines.append(f"AAVE {t}: xu hướng {r['side']}, tuổi {r['age']} nến, {r['late']}/4 dấu hiệu cuối sóng, giá {fmt(r['ep'])}, EMA20 {fmt(r['e20'])}, EMA50 {fmt(r['e50'])}. Chưa có kèo.")
-        if not lines: lines.append(f"AAVE {t}: không có xu hướng rõ, chưa có kèo.")
-    return "\n".join(lines)
-
+            key=None if p is None else (p["rk"],p["add"])
+            if key in seen: rows[seen[key]]=rows[seen[key]].replace(f"Tổng điểm {seen_s[key]}",f"Tổng điểm {seen_s[key]}–{scx}",1); continue
+            seen[key]=len(rows); seen_s[key]=scx
+            if p is None: rows.append(f"• Tổng điểm {scx}: <b>BỎ QUA</b>"); continue
+            hs=p["hist"]; add=f"\n   ↳ chân 1 <code>{p['leg1']:,.0f}$</code> + treo nhồi <code>{p['leg2']:,.0f}$</code> tại EMA100 <code>{fmt(r['e100'])}</code>" if p["add"] else ""
+            hstr=f"\n   ↳ lịch sử: {hs[0]} lệnh · thắng {hs[1]}% · TB {hs[2]:+.1f}% vốn · tệ nhất {hs[3]}%" if hs else ""
+            rows.append(f"• Tổng điểm {scx}: rủi ro <b>{p['rk']*100:.0f}%</b> vốn → vol <b>{p['tot']:,.0f}$</b>{add}{hstr}")
+        txt=(f"💼 <b>PHƯƠNG ÁN VOL</b> (vốn {von:,.0f}$)\n"+"\n".join(rows)+
+             f"\n<i>Tự kiểm 2 ý trên Binance: Long/Short ratio &lt; 1,5 và funding TB thị trường &lt; 0,04% — đạt mỗi ý +1 điểm.</i>\n{SEP}\n"
+             "🧭 <b>QUẢN LÝ LỆNH</b>\n• Tại 1R: nếu giá đóng cùng phía EMA20, BTC cùng phía EMA20 BTC và RSI &gt; 60 (short &lt; 40) → dời SL lên +0,5R, gồng 2,5 ATR. Không đủ → chốt hết.\n"
+             "• Chốt sớm: lãi ≥ 0,3R mà xuất hiện nến nhấn chìm ngược hoặc nến đóng ngược qua EMA20.\n\n<i>Tín hiệu tham khảo, bạn tự quyết định.</i>")
+        posts.append(dict(photo=img,caption=cap,text=txt))
+    if not posts and status:
+        r=[x for x in res if x["trend"]]
+        if r:
+            r=r[0]; L=r["side"]=="LONG"; z=r["e50"]; a_=r["atr"]
+            cap=(f"📋 <b>TRẠNG THÁI AAVE · 4H</b>\n🕒 {t} (giờ VN)\n{SEP}\n"
+                 f"Xu hướng: <b>{'TĂNG' if L else 'GIẢM'}</b> · tuổi {r['age']} nến\nGiá <code>{fmt(r['ep'])}</code> · EMA20 <code>{fmt(r['e20'])}</code> · EMA50 <code>{fmt(z)}</code>\n"
+                 f"Cuối sóng: <b>{r['late']}/4</b> {'→ có tín hiệu cũng BỎ QUA' if r['late']>=3 else ''}\n"
+                 f"Vùng chờ pullback EMA50: <code>{fmt(z-0.3*a_)} – {fmt(z+0.3*a_)}</code>\n⏳ Chưa có kèo 4H.")
+            img=chart(A4,f"AAVE/USDT 4H · trạng thái · {t}",[(z,"EMA50","#42a5f5","--")],zone=(z-0.3*a_,z+0.3*a_,"vùng chờ"))
+            posts.append(dict(photo=img,caption=cap,text=None))
+        else: posts.append(dict(photo=None,caption=None,text=f"📋 <b>TRẠNG THÁI AAVE · 4H</b> · {t}\nKhông có xu hướng rõ (EMA50/EMA100 chưa đồng thuận). ⏳ Chưa có kèo 4H."))
+    return posts
 # ===== Phương pháp 1h (squeeze EMA, lọc G3) =====
 # 4 EMA 20/50/100/200 khung 1h co cụm (< 1,5 ATR) trong 30 nến gần nhất, rồi vừa xếp thẳng hàng cùng chiều xu hướng 4h
 # (EMA50>EMA100 và EMA100 dốc lên 10 nến, ngược lại cho short), xu hướng 4h dưới 100 nến. Vào ở giá mở nến 1h kế tiếp.
@@ -95,17 +159,19 @@ def h1_eval(H,A4):
         sp=(lo[i]-a[i]) if d==1 else (hi[i]+a[i])
         return d if d*(c[i]-sp)>0 else 0
     return dict(entry=entry,n=n,o=o,h=h,l=l,c=c,a=a,lo=lo,hi=hi,e20=e20,e50=e50,hage=hage,w=w,tc=H.tc.values)
-def h1_messages(H,A4,vol):
-    R=h1_eval(H,A4); i=R["n"]-1; msgs=[]; t=lambda k:(pd.to_datetime(R["tc"][k],unit="ms")+pd.Timedelta(hours=7)).strftime("%d/%m %H:%M")
-    hs=H1_HIST
+
+def h1_posts(H,A4,vol,status):
+    R=h1_eval(H,A4); i=R["n"]-1; posts=[]; hs=H1_HIST; t=tvn(R["tc"][i])
     d=R["entry"](i)
     if d:
-        sp=(R["lo"][i]-R["a"][i]) if d==1 else (R["hi"][i]+R["a"][i]); ep=R["c"][i]; rp=abs(ep-sp)/ep
-        msgs.append(f"🔔 KÈO 1H {'LONG' if d==1 else 'SHORT'} AAVE (squeeze EMA) – nến 1h đóng {t(i)}\n"
-            f"Entry: ~{fmt(ep)} (giá mở nến kế tiếp)\nSL: {fmt(sp)} ({rp*100:.1f}%) – lỗ tối đa ~{vol*rp:,.0f}$ với vol {vol:,.0f}$\n"
-            f"Thoát: khi EMA20 cắt ngược EMA50 trên nến 1h đóng (tool sẽ nhắn).\nXu hướng 4h tuổi {int(R['hage'][i])} nến.\n"
-            f"Lịch sử 2022-11/2026: {hs['n']} lệnh, thắng {hs['win']}% (2025-26: {hs['OOS'][1]}%), thắng TB +{hs['avg_win']}$, thua TB {hs['avg_loss']}$ với vol 200$. Ăn nhờ vài lệnh chạy dài, thua nhiều lệnh nhỏ.\nBạn tự quyết định.")
-    # nhắn thoát: tìm lệnh 1h gần nhất còn mở và xem nến vừa đóng có phải điểm thoát
+        L=d==1; sp=(R["lo"][i]-R["a"][i]) if L else (R["hi"][i]+R["a"][i]); ep=R["c"][i]; rp=abs(ep-sp)/ep
+        cap=(f"{'🟢' if L else '🔴'} <b>KÈO {'LONG' if L else 'SHORT'} · AAVE/USDT · 1H</b>  <i>(squeeze EMA)</i>\n🕒 Nến đóng {t} (giờ VN)\n{SEP}\n"
+             f"📍 <b>Entry</b>   <code>{fmt(ep)}</code>  <i>(giá mở nến kế tiếp)</i>\n🛑 <b>SL</b>        <code>{fmt(sp)}</code>  <i>(cách {rp*100:.1f}%)</i>\n"
+             f"🚪 <b>Thoát</b>   khi EMA20 cắt ngược EMA50 (tool sẽ nhắn)\n💼 <b>Vol</b>       <code>{vol:,.0f}$</code> → lỗ tối đa ~<code>{vol*rp:,.1f}$</code>\n{SEP}\n"
+             f"📈 Lịch sử: {hs['n']} lệnh · thắng {hs['win']}% (2025-26: {hs['OOS'][1]}%) · thắng TB +{hs['avg_win']}$ · thua TB {hs['avg_loss']}$\n"
+             f"<i>Thắng ít nhưng ăn dày: nhiều lệnh thua nhỏ là bình thường. Bạn tự quyết định.</i>")
+        img=chart(H,f"AAVE/USDT 1H · {'LONG' if L else 'SHORT'} · {t}",[(ep+(ep-sp),"1R","#66bb6a",":"),(ep,"Entry","#ffffff","-"),(sp,"SL","#ef5350","--")],mark=True,n=120)
+        posts.append(dict(photo=img,caption=cap,text=None))
     k=i-1; start=None
     while k>max(300,i-600):
         if R["entry"](k): start=k; break
@@ -117,31 +183,45 @@ def h1_messages(H,A4,vol):
             cross=(R["e20"][j]<R["e50"][j]) if dd==1 else (R["e20"][j]>R["e50"][j])
             if hit or cross:
                 if j==i:
-                    xp=sp if hit else R["c"][j]; pnl=dd*(xp-ep)/ep*vol
-                    msgs.append(f"🚪 THOÁT LỆNH 1H {'LONG' if dd==1 else 'SHORT'} AAVE – nến 1h đóng {t(i)}\n"
-                        f"{'Chạm SL' if hit else 'EMA20 cắt ngược EMA50'}. Vào ~{fmt(ep)} lúc {t(start)}, thoát ~{fmt(xp)} → khoảng {pnl:+,.1f}$ với vol {vol:,.0f}$ (chưa trừ phí).")
+                    xp=sp if hit else R["c"][j]; pct=dd*(xp-ep)/ep; pnl=pct*vol
+                    posts.append(dict(photo=None,caption=None,text=(f"🚪 <b>THOÁT LỆNH {'LONG' if dd==1 else 'SHORT'} · AAVE/USDT · 1H</b>\n🕒 Nến đóng {t} (giờ VN)\n{SEP}\n"
+                        f"Lý do: <b>{'chạm SL' if hit else 'EMA20 cắt ngược EMA50'}</b>\nVào <code>{fmt(ep)}</code> ({tvn(R['tc'][start])}) → thoát ~<code>{fmt(xp)}</code>\n"
+                        f"Kết quả: <b>{pct*100:+.2f}%</b> ≈ <b>{pnl:+,.1f}$</b> với vol {vol:,.0f}$ <i>(chưa trừ phí)</i>")))
                 break
-    return msgs, R
-def send(text):
+    if status and not posts:
+        posts.append(dict(photo=None,caption=None,text=f"📋 <b>TRẠNG THÁI AAVE · 1H</b> · {t}\nDải 4 EMA rộng <b>{R['w'][i]:.1f} ATR</b> (cần &lt; 1,5 trong 30 nến gần nhất) · xu hướng 4H tuổi {int(R['hage'][i])} nến.\n⏳ Chưa có kèo 1H."))
+    return posts
+
+def tg(method,data,files=None):
+    tok=os.environ.get("TELEGRAM_TOKEN"); url=f"https://api.telegram.org/bot{tok}/{method}"
+    if files:
+        bd="----f8bound"; body=b""
+        for k,v in data.items(): body+=f"--{bd}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode()
+        for k,(fn,b) in files.items(): body+=f"--{bd}\r\nContent-Disposition: form-data; name=\"{k}\"; filename=\"{fn}\"\r\nContent-Type: image/png\r\n\r\n".encode()+b+b"\r\n"
+        body+=f"--{bd}--\r\n".encode(); req=urllib.request.Request(url,data=body,headers={"Content-Type":f"multipart/form-data; boundary={bd}"})
+    else: req=urllib.request.Request(url,data=urllib.parse.urlencode(data).encode())
+    return json.loads(urllib.request.urlopen(req,timeout=60).read())
+def send_post(p):
     tok,cid=os.environ.get("TELEGRAM_TOKEN"),os.environ.get("TELEGRAM_CHAT_ID")
-    if not (tok and cid): print(text); return
-    data=urllib.parse.urlencode({"chat_id":cid,"text":text}).encode()
-    urllib.request.urlopen(f"https://api.telegram.org/bot{tok}/sendMessage",data=data,timeout=30)
+    if not (tok and cid):
+        print(p.get("caption") or "", "\n", p.get("text") or "")
+        if p.get("photo") and os.environ.get("SAVE_PNG"): open(os.environ["SAVE_PNG"]+f"_{abs(hash(p['caption']))%1000}.png","wb").write(p["photo"])
+        return
+    if p.get("photo"): tg("sendPhoto",{"chat_id":cid,"caption":p["caption"],"parse_mode":"HTML"},{"photo":("chart.png",p["photo"])})
+    if p.get("text"): tg("sendMessage",{"chat_id":cid,"text":p["text"],"parse_mode":"HTML","disable_web_page_preview":"true"})
+def send(text): send_post(dict(text=html.escape(text)))
+
 if __name__=="__main__":
     import sys
-    von=float(os.environ.get("VON","1000"))
-    if "--test" in sys.argv:   # gửi 1 tin mẫu (kèo F8 short 04/11/2026 đã xảy ra) để thử Telegram
-        send("🧪 TIN THỬ – tool F8 đã kết nối Telegram.\nVí dụ kèo thật đã xảy ra: SHORT AAVE nến 4h đóng 04/11 07:00, entry ~127.1, SL đóng nến 142.4 (12%), SL cứng 150.0, mốc 1R 111.9, 2/4 dấu hiệu cuối sóng → rủi ro giảm nửa. Kết quả: gồng tới 15/11, thoát 105.8, +8.3% vốn.")
+    von=float(os.environ.get("VON","1000")); vol1=float(os.environ.get("VOL_1H","200")); status=os.environ.get("STATUS")=="1"
     A4=klines("AAVEUSDT"); B4=klines("BTCUSDT"); H1=klines("AAVEUSDT","1h")
+    if "--test" in sys.argv:   # mô phỏng tin kèo trên dữ liệu thật (ép bật tín hiệu) để xem mẫu
+        res,_=evaluate(A4,B4,von); r=[x for x in res if x["trend"]] or res; r[0]["ok"]=True
+        for p in f8_posts([r[0]],A4,von,False): p["caption"]="🧪 <b>TIN MẪU – KHÔNG PHẢI KÈO THẬT</b>\n"+p["caption"]; send_post(p)
+        sys.exit()
     now=dt.datetime.now(dt.timezone.utc).timestamp()*1000
-    out=[]
-    res,tc=evaluate(A4,B4,von)
-    fresh4=now-A4.tc.iloc[-1] < 3600*1000          # chỉ báo kèo 4h ở lượt chạy ngay sau khi nến 4h đóng
-    msg=message(res,tc,von)
-    if msg and (fresh4 or os.environ.get("STATUS")=="1"): out.append(msg)
-    vol1=float(os.environ.get("VOL_1H","200"))
-    m1,R=h1_messages(H1,A4,vol1); out+=m1
-    if os.environ.get("STATUS")=="1":
-        i=R["n"]-1; out.append(f"1h: dải EMA rộng {R['w'][i]:.1f} ATR (cần <1,5 trong 30 nến gần nhất), xu hướng 4h tuổi {int(R['hage'][i])} nến. Chưa có kèo 1h mới.")
-    if out: send("\n\n".join(out))
-    else: print("Chưa có kèo.")
+    res,_=evaluate(A4,B4,von); fresh4=now-A4.tc.iloc[-1]<3600*1000
+    posts=f8_posts(res,A4,von,status) if (fresh4 or status) else []
+    posts+=h1_posts(H1,A4,vol1,status)
+    for p in posts: send_post(p)
+    if not posts: print("Chưa có kèo.")
