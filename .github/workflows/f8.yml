@@ -18,5 +18,6 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           VON: ${{ vars.VON || '1000' }}
           VOL_1H: ${{ vars.VOL_1H || '200' }}
+          PAPER_START: ${{ vars.PAPER_START || '2026-11-23' }}
           STATUS: ${{ (github.event_name == 'workflow_dispatch' || github.event.schedule == '3 0 * * *') && '1' || '0' }}
         run: python f8_alert.py

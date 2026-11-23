@@ -192,6 +192,49 @@ def h1_posts(H,A4,vol,status):
         posts.append(dict(photo=None,caption=None,text=f"📋 <b>TRẠNG THÁI AAVE · 1H</b> · {t}\nDải 4 EMA rộng <b>{R['w'][i]:.1f} ATR</b> (cần &lt; 1,5 trong 30 nến gần nhất) · xu hướng 4H tuổi {int(R['hage'][i])} nến.\n⏳ Chưa có kèo 1H."))
     return posts
 
+
+# ===================== SỔ LỆNH ẢO (paper trading) =====================
+def paper_posts(fresh4,status):
+    import paper as P
+    start=pd.Timestamp(os.environ.get("PAPER_START","2026-11-23"),tz="UTC").value//10**6
+    eq0=float(os.environ.get("VON","1000")); vol=float(os.environ.get("VOL_1H","200"))
+    A=P.hist("AAVEUSDT","4h",start-1100*P.MS["4h"]); B=P.hist("BTCUSDT","4h",start-1100*P.MS["4h"])
+    H=P.hist("AAVEUSDT","1h",start-1100*P.MS["1h"])
+    I=P.f8_ind(A,B); s4=int(np.searchsorted(A.t.values,start)); T4,eq=P.f8_book(I,s4,eq0)
+    s1=int(np.searchsorted(H.t.values,start)); T1,tot1=P.h1_book(H,A,s1,vol)
+    n4,n1=len(A)-1,len(H)-1; lines=[]
+    side=lambda s:"LONG" if s==1 else "SHORT"
+    if fresh4:
+        for x in T4:
+            if x["i"]==n4:
+                lines.append(f"📥 <b>4H · vào lệnh ảo {side(x['s'])}</b> tại giá mở nến kế tiếp · vol chân 1 <code>{x['bf']*x['eq0']:,.0f}$</code>"
+                             +(f" · treo nhồi <code>{x['bf']*x['sig']['addr']*x['eq0']:,.0f}$</code> ở EMA100" if x['sig']['addr'] else "")+f" · SL <code>{fmt(x['sp0'])}</code>")
+            for kind,j,px in x["ev"]:
+                if j!=n4 or kind=="entry": continue
+                if kind=="add": lines.append(f"➕ <b>4H · khớp lệnh nhồi</b> {side(x['s'])} tại <code>{fmt(px)}</code>")
+                if kind=="trail": lines.append(f"🛡 <b>4H · đạt 1R, lệnh khỏe → gồng</b>: dời SL lên <code>{fmt(px)}</code> (+0,5R), kéo theo 2,5 ATR")
+                if kind=="exit":
+                    why={"trail":"chạm SL kéo theo","early":"chốt sớm (nến đảo chiều/đóng qua EMA20)","TP":"chốt 1R","SL":"cắt lỗ (nến đóng qua SL)","hard":"chạm SL cứng"}[x["why"]]
+                    lines.append(f"📤 <b>4H · đóng lệnh ảo {side(x['s'])}</b> tại <code>{fmt(px)}</code> · {why} · <b>{x['pnl']:+,.2f}$</b> ({x['pnl']/x['eq0']*100:+.2f}% vốn)")
+    for x in T1:
+        if x["i"]==n1: lines.append(f"📥 <b>1H · vào lệnh ảo {side(x['s'])}</b> vol <code>{vol:,.0f}$</code> · SL <code>{fmt(x['sp'])}</code>")
+        if not x["open"] and x["j"]==n1: lines.append(f"📤 <b>1H · đóng lệnh ảo {side(x['s'])}</b> tại <code>{fmt(x['xp'])}</code> · {'chạm SL' if x['why']=='SL' else 'EMA20 cắt ngược EMA50'} · <b>{x['usd']:+,.2f}$</b>")
+    posts=[]
+    if lines: posts.append(dict(photo=None,caption=None,text="📒 <b>SỔ LỆNH ẢO</b>\n"+"\n".join(lines)))
+    if status:
+        c4=[x for x in T4 if not x["open"]]; c1=[x for x in T1 if not x["open"]]
+        o4=[x for x in T4 if x["open"]]; o1=[x for x in T1 if x["open"]]
+        eq_open=eq+sum(x["bf"]*x["ret"]*eq for x in o4)
+        txt=(f"📒 <b>SỔ LỆNH ẢO</b> · từ {(pd.to_datetime(start,unit='ms')+VN).strftime('%d/%m/%Y')}\n{SEP}\n"
+             f"<b>4H F8</b> · vốn {eq0:,.0f}$ → <b>{eq:,.2f}$</b> ({(eq/eq0-1)*100:+.2f}%)\n"
+             f"Đã đóng {len(c4)} lệnh · thắng {sum(x['pnl']>0 for x in c4)}"
+             +(f"\nĐang mở: {side(o4[0]['s'])} từ <code>{fmt(o4[0]['legs'][0][0])}</code>, SL <code>{fmt(o4[0]['sp'])}</code>, tạm tính {eq_open-eq:+,.2f}$" if o4 else "\nKhông có lệnh mở")+"\n"
+             f"<b>1H squeeze</b> · vol {vol:,.0f}$/lệnh · tổng <b>{tot1:+,.2f}$</b>\nĐã đóng {len(c1)} lệnh · thắng {sum(x['usd']>0 for x in c1)}"
+             +(f"\nĐang mở: {side(o1[0]['s'])} từ <code>{fmt(o1[0]['ep'])}</code>, SL <code>{fmt(o1[0]['sp'])}</code>, tạm tính {o1[0]['usd']:+,.2f}$" if o1 else "\nKhông có lệnh mở")
+             +"\n<i>Lệnh ảo theo đúng luật backtest, giá spot, có phí 0,05%/chiều, chưa tính funding. Điểm 4H chỉ dùng 5 tiêu chí tự động (thận trọng hơn).</i>")
+        posts.append(dict(photo=None,caption=None,text=txt))
+    return posts
+
 def tg(method,data,files=None):
     tok=os.environ.get("TELEGRAM_TOKEN"); url=f"https://api.telegram.org/bot{tok}/{method}"
     if files:
@@ -223,5 +266,7 @@ if __name__=="__main__":
     res,_=evaluate(A4,B4,von); fresh4=now-A4.tc.iloc[-1]<3600*1000
     posts=f8_posts(res,A4,von,status) if (fresh4 or status) else []
     posts+=h1_posts(H1,A4,vol1,status)
+    try: posts+=paper_posts(fresh4,status)
+    except Exception as e: print("paper lỗi:",e)
     for p in posts: send_post(p)
     if not posts: print("Chưa có kèo.")
