@@ -2,7 +2,7 @@ name: F8 AAVE 4h
 on:
   schedule:
     - cron: "3 0 * * *"                 # 7h03 sáng VN: kiểm tra kèo + gửi trạng thái hằng ngày
-    - cron: "3 4,8,12,16,20 * * *"      # 3 phút sau các nến 4h còn lại (11h, 15h, 19h, 23h, 3h giờ VN)
+    - cron: "3 1-23 * * *"              # 3 phút sau mỗi nến 1h đóng (kèo 4h chỉ báo ở lượt ngay sau nến 4h đóng)
   workflow_dispatch: {}
 jobs:
   check:
@@ -17,5 +17,6 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           VON: ${{ vars.VON || '1000' }}
+          VOL_1H: ${{ vars.VOL_1H || '200' }}
           STATUS: ${{ (github.event_name == 'workflow_dispatch' || github.event.schedule == '3 0 * * *') && '1' || '0' }}
         run: python f8_alert.py

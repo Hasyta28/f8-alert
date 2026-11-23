@@ -9,8 +9,8 @@ def rsi(c,n=14):
     s=pd.Series(c); d=s.diff(); u=d.clip(lower=0).ewm(alpha=1/n,adjust=False).mean(); dn=(-d.clip(upper=0)).ewm(alpha=1/n,adjust=False).mean(); return (100-100/(1+u/dn)).values
 def atr(h,l,c,n=14):
     pc=pd.Series(c).shift(); tr=np.maximum(h-l,np.maximum(abs(h-pc),abs(l-pc))); return pd.Series(tr).ewm(alpha=1/n,adjust=False).mean().values
-def klines(sym):
-    u=f"https://data-api.binance.vision/api/v3/klines?symbol={sym}&interval=4h&limit=1000"
+def klines(sym,iv="4h"):
+    u=f"https://data-api.binance.vision/api/v3/klines?symbol={sym}&interval={iv}&limit=1000"
     k=json.loads(urllib.request.urlopen(u,timeout=30).read())
     d=pd.DataFrame([x[:6]+[x[6]] for x in k],columns=["t","o","h","l","c","v","tc"]).astype(float)
     now=dt.datetime.now(dt.timezone.utc).timestamp()*1000
@@ -72,6 +72,56 @@ def message(res,tc,von):
             if r["trend"]: lines.append(f"AAVE {t}: xu hướng {r['side']}, tuổi {r['age']} nến, {r['late']}/4 dấu hiệu cuối sóng, giá {fmt(r['ep'])}, EMA20 {fmt(r['e20'])}, EMA50 {fmt(r['e50'])}. Chưa có kèo.")
         if not lines: lines.append(f"AAVE {t}: không có xu hướng rõ, chưa có kèo.")
     return "\n".join(lines)
+
+# ===== Phương pháp 1h (squeeze EMA, lọc G3) =====
+# 4 EMA 20/50/100/200 khung 1h co cụm (< 1,5 ATR) trong 30 nến gần nhất, rồi vừa xếp thẳng hàng cùng chiều xu hướng 4h
+# (EMA50>EMA100 và EMA100 dốc lên 10 nến, ngược lại cho short), xu hướng 4h dưới 100 nến. Vào ở giá mở nến 1h kế tiếp.
+# SL = mép dải EMA ∓ 1 ATR(1h). Thoát khi EMA20 cắt ngược EMA50 (nến 1h đóng). Vol cố định (mặc định 200$).
+H1_HIST=dict(n=101,win=42,IS=(63,35),OOS=(38,53),avg_win=16.6,avg_loss=-6.7,worst=-17.9,total=301)
+def h1_eval(H,A4):
+    o,h,l,c=(H[x].values for x in "ohlc"); a=atr(h,l,c); n=len(c)
+    e20,e50,e100,e200=(ema(c,k) for k in (20,50,100,200)); EM=np.vstack([e20,e50,e100,e200])
+    hi,lo=EM.max(0),EM.min(0); w=(hi-lo)/a; nar=pd.Series(w<1.5).rolling(30).max().values
+    up=(e20>e50)&(e50>e100)&(e100>e200); dn=(e20<e50)&(e50<e100)&(e100<e200)
+    c4=A4.c.values; f50,f100=ema(c4,50),ema(c4,100); sl10=pd.Series(f100).diff(10).values
+    tr4=np.where((f50>f100)&(sl10>0),1,np.where((f50<f100)&(sl10<0),-1,0))
+    sg=np.sign(f50-f100); age=np.zeros(len(c4),int)
+    for k in range(1,len(c4)): age[k]=age[k-1]+1 if sg[k]==sg[k-1] else 0
+    idx=np.searchsorted(A4.tc.values,H.tc.values,side="right")-1   # nến 4h đã đóng gần nhất tại lúc nến 1h đóng
+    htr=np.where(idx>=0,tr4[np.maximum(idx,0)],0); hage=np.where(idx>=0,age[np.maximum(idx,0)],999)
+    def entry(i):
+        d=1 if (up[i] and not up[i-1]) else -1 if (dn[i] and not dn[i-1]) else 0
+        if d==0 or nar[i]!=1 or htr[i]!=d or hage[i]>=100: return 0
+        sp=(lo[i]-a[i]) if d==1 else (hi[i]+a[i])
+        return d if d*(c[i]-sp)>0 else 0
+    return dict(entry=entry,n=n,o=o,h=h,l=l,c=c,a=a,lo=lo,hi=hi,e20=e20,e50=e50,hage=hage,w=w,tc=H.tc.values)
+def h1_messages(H,A4,vol):
+    R=h1_eval(H,A4); i=R["n"]-1; msgs=[]; t=lambda k:(pd.to_datetime(R["tc"][k],unit="ms")+pd.Timedelta(hours=7)).strftime("%d/%m %H:%M")
+    hs=H1_HIST
+    d=R["entry"](i)
+    if d:
+        sp=(R["lo"][i]-R["a"][i]) if d==1 else (R["hi"][i]+R["a"][i]); ep=R["c"][i]; rp=abs(ep-sp)/ep
+        msgs.append(f"🔔 KÈO 1H {'LONG' if d==1 else 'SHORT'} AAVE (squeeze EMA) – nến 1h đóng {t(i)}\n"
+            f"Entry: ~{fmt(ep)} (giá mở nến kế tiếp)\nSL: {fmt(sp)} ({rp*100:.1f}%) – lỗ tối đa ~{vol*rp:,.0f}$ với vol {vol:,.0f}$\n"
+            f"Thoát: khi EMA20 cắt ngược EMA50 trên nến 1h đóng (tool sẽ nhắn).\nXu hướng 4h tuổi {int(R['hage'][i])} nến.\n"
+            f"Lịch sử 2022-11/2026: {hs['n']} lệnh, thắng {hs['win']}% (2025-26: {hs['OOS'][1]}%), thắng TB +{hs['avg_win']}$, thua TB {hs['avg_loss']}$ với vol 200$. Ăn nhờ vài lệnh chạy dài, thua nhiều lệnh nhỏ.\nBạn tự quyết định.")
+    # nhắn thoát: tìm lệnh 1h gần nhất còn mở và xem nến vừa đóng có phải điểm thoát
+    k=i-1; start=None
+    while k>max(300,i-600):
+        if R["entry"](k): start=k; break
+        k-=1
+    if start is not None and not d:
+        dd=R["entry"](start); sp=(R["lo"][start]-R["a"][start]) if dd==1 else (R["hi"][start]+R["a"][start]); ep=R["o"][start+1]
+        for j in range(start+1,i+1):
+            hit=(dd==1 and R["l"][j]<=sp) or (dd==-1 and R["h"][j]>=sp)
+            cross=(R["e20"][j]<R["e50"][j]) if dd==1 else (R["e20"][j]>R["e50"][j])
+            if hit or cross:
+                if j==i:
+                    xp=sp if hit else R["c"][j]; pnl=dd*(xp-ep)/ep*vol
+                    msgs.append(f"🚪 THOÁT LỆNH 1H {'LONG' if dd==1 else 'SHORT'} AAVE – nến 1h đóng {t(i)}\n"
+                        f"{'Chạm SL' if hit else 'EMA20 cắt ngược EMA50'}. Vào ~{fmt(ep)} lúc {t(start)}, thoát ~{fmt(xp)} → khoảng {pnl:+,.1f}$ với vol {vol:,.0f}$ (chưa trừ phí).")
+                break
+    return msgs, R
 def send(text):
     tok,cid=os.environ.get("TELEGRAM_TOKEN"),os.environ.get("TELEGRAM_CHAT_ID")
     if not (tok and cid): print(text); return
@@ -82,7 +132,16 @@ if __name__=="__main__":
     von=float(os.environ.get("VON","1000"))
     if "--test" in sys.argv:   # gửi 1 tin mẫu (kèo F8 short 04/11/2026 đã xảy ra) để thử Telegram
         send("🧪 TIN THỬ – tool F8 đã kết nối Telegram.\nVí dụ kèo thật đã xảy ra: SHORT AAVE nến 4h đóng 04/11 07:00, entry ~127.1, SL đóng nến 142.4 (12%), SL cứng 150.0, mốc 1R 111.9, 2/4 dấu hiệu cuối sóng → rủi ro giảm nửa. Kết quả: gồng tới 15/11, thoát 105.8, +8.3% vốn.")
-    res,tc=evaluate(klines("AAVEUSDT"),klines("BTCUSDT"),von)
+    A4=klines("AAVEUSDT"); B4=klines("BTCUSDT"); H1=klines("AAVEUSDT","1h")
+    now=dt.datetime.now(dt.timezone.utc).timestamp()*1000
+    out=[]
+    res,tc=evaluate(A4,B4,von)
+    fresh4=now-A4.tc.iloc[-1] < 3600*1000          # chỉ báo kèo 4h ở lượt chạy ngay sau khi nến 4h đóng
     msg=message(res,tc,von)
-    if msg: send(msg)
+    if msg and (fresh4 or os.environ.get("STATUS")=="1"): out.append(msg)
+    vol1=float(os.environ.get("VOL_1H","200"))
+    m1,R=h1_messages(H1,A4,vol1); out+=m1
+    if os.environ.get("STATUS")=="1":
+        i=R["n"]-1; out.append(f"1h: dải EMA rộng {R['w'][i]:.1f} ATR (cần <1,5 trong 30 nến gần nhất), xu hướng 4h tuổi {int(R['hage'][i])} nến. Chưa có kèo 1h mới.")
+    if out: send("\n\n".join(out))
     else: print("Chưa có kèo.")
