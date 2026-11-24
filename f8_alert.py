@@ -262,6 +262,7 @@ if __name__=="__main__":
     von=float(os.environ.get("VON","1000")); vol1=float(os.environ.get("VOL_1H","200")); status=os.environ.get("STATUS")=="1"
     A4=klines("AAVEUSDT"); B4=klines("BTCUSDT"); H1=klines("AAVEUSDT","1h")
     if "--chats" in sys.argv:   # liệt kê các nhóm bot đã được thêm vào (để lấy chat id)
+        me=tg("getMe",{}).get("result",{}); print("BOT:",me.get("first_name"),"@"+str(me.get("username")))
         seen={}
         for u in tg("getUpdates",{"allowed_updates":'["message","my_chat_member","channel_post"]'}).get("result",[]):
             for k in ("message","my_chat_member","channel_post"):
