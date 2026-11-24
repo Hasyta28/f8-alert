@@ -7,8 +7,9 @@ import paper as P
 P.MS.setdefault("15m",900000)
 COINS="BTC ETH SOL BNB XRP DOGE ADA AVAX LINK DOT LTC BCH TRX ATOM NEAR FIL APT ARB OP INJ SUI UNI AAVE ETC XLM HBAR TIA SEI WLD PEPE RENDER TON ICP STX FET".split()
 VN=pd.Timedelta(hours=7)
-WIN=[0,0]
-def px(x): return f"{x:,.2f}" if x>=100 else f"{x:,.4f}" if x>=1 else f"{x:.6g}"
+WIN=[0,0]; EVP=None
+def px(x):
+    from f8_alert import fmt; return fmt(x)
 def books(start,vol):
     def one(coin):
         s=coin+"USDT"
@@ -20,27 +21,32 @@ def books(start,vol):
                 T,_=P.h1_book(L,Tr,int(np.searchsorted(L.t.values,start)),vol)
                 for x in T:
                     x["coin"]=coin; x["t_sig"]=L.t.values[x["i"]]+P.MS[k]; x["t_x"]=L.t.values[x["j"]]+P.MS[k]; x["last"]=L.c.values[-1]
-                out[k]=T
+                out[k]=T; out[k+"_df"]=L
             return out
         except Exception as e: print("multi lỗi",coin,e); return {}
     with cf.ThreadPoolExecutor(8) as ex: R=list(ex.map(one,COINS))
-    B={"1h":[],"15m":[]}
+    B={"1h":[],"15m":[],"df":{}}
     for r in R:
-        for k,T in r.items(): B[k]+=T
+        for k in ("1h","15m"):
+            if k in r:
+                B[k]+=r[k]
+                if r[k]: B["df"][(r[k][0]["coin"],k)]=r[k+"_df"]
     return B
 def multi_posts(status):
     start=pd.Timestamp(os.environ.get("PAPER_START","2026-11-23"),tz="UTC").value//10**6
     vol=float(os.environ.get("VOL_MULTI","100"))
     w0,w1=WIN   # cửa sổ do f8_alert đặt: các nến đóng từ lần chạy trước đến giờ
-    B=books(start,vol); side=lambda s:"LONG" if s==1 else "SHORT"; lines=[]
+    B=books(start,vol); side=lambda s:"LONG" if s==1 else "SHORT"; lines=[]; G={}
     for k in ("1h","15m"):
         for x in sorted(B[k],key=lambda x:x["t_sig"]):
             if w0<x["t_sig"]<=w1:
+                G[len(lines)]=(B["df"][(x["coin"],k)],f"Lệnh ảo {x['coin']}/USDT {k.upper()} · {side(x['s'])}",[(x['ep'],"Entry","#ffffff","-"),(x['sp'],"SL","#ef5350","--")])
                 lines.append(f"📥 {k.upper()} <b>{x['coin']}</b> {side(x['s'])} ~<code>{px(x['ep'])}</code> · SL <code>{px(x['sp'])}</code>")
             if not x["open"] and w0<x["t_x"]<=w1:
+                G[len(lines)]=(B["df"][(x["coin"],k)],f"Lệnh ảo {x['coin']}/USDT {k.upper()} · đóng {side(x['s'])}",[(x['ep'],"Entry","#ffffff","-"),(x['xp'],"Thoát","#66bb6a" if x['usd']>0 else "#ef5350","--")])
                 lines.append(f"📤 {k.upper()} <b>{x['coin']}</b> {side(x['s'])} đóng <code>{px(x['xp'])}</code> · {'SL' if x['why']=='SL' else 'EMA cắt ngược'} · <b>{x['usd']:+,.2f}$</b>")
-    posts=[]
-    if lines: posts.append(dict(photo=None,caption=None,text=f"🗂 <b>LỆNH ẢO ĐA COIN</b> · vol {vol:,.0f}$/lệnh\n"+"\n".join(lines)))
+    head=f"🗂 <b>LỆNH ẢO ĐA COIN</b> · vol {vol:,.0f}$/lệnh"
+    posts=EVP(head,lines,G) if EVP else ([dict(photo=None,caption=None,text=head+"\n"+"\n".join(lines))] if lines else [])
     if status:
         txt=f"🗂 <b>SỔ ẢO ĐA COIN</b> · {len(COINS)} coin · từ {(pd.to_datetime(start,unit='ms')+VN).strftime('%d/%m/%Y')} · vol {vol:,.0f}$/lệnh\n━━━━━━━━━━━━━━━━━━"
         for k,lab in (("1h","1H squeeze (backtest có lãi)"),("15m","M15 squeeze (backtest lỗ – chỉ quan sát)")):

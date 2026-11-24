@@ -56,7 +56,9 @@ def evaluate(A,B,von=1000.0):
 # ===================== TRÌNH BÀY TIN NHẮN =====================
 import io, html
 VN=pd.Timedelta(hours=7)
-def fmt(x): return f"{x:,.2f}"
+def fmt(x):
+    if abs(x)>=100 or x==0: return f"{x:,.2f}"
+    import math; return f"{x:,.{max(2,4-int(math.floor(math.log10(abs(x)))))}f}"
 WIN=[0,0]   # (w0,w1]: chỉ báo các nến ĐÓNG trong khoảng này (từ lần chạy thành công trước đến giờ) -> không gửi trùng
 def inw(close_ms): return WIN[0]<close_ms<=WIN[1]
 def set_window(now):
@@ -104,10 +106,10 @@ def chart(df,title,levels,mark=None,n=90,zone=None):
     lo=min([d.l.min()]+[p for p,*_ in levels]); hi=max([d.h.max()]+[p for p,*_ in levels])
     ax.set_ylim(lo-(hi-lo)*0.06,hi+(hi-lo)*0.08)
     ticks=list(range(0,N,max(1,N//6))); ax.set_xticks(ticks); ax.set_xticklabels([(pd.to_datetime(d.t.iloc[k],unit="ms")+VN).strftime("%d/%m %Hh") for k in ticks],color=fg,fontsize=8)
-    ax.tick_params(colors=fg,labelsize=8)
+    ax.tick_params(colors=fg,labelsize=8); ax.ticklabel_format(axis="y",style="plain",useOffset=False)
     for sp_ in ax.spines.values(): sp_.set_color(grid)
     ax.grid(color=grid,lw=0.6); ax.legend(loc="upper left",fontsize=8,facecolor=bg,edgecolor=grid,labelcolor=fg,ncol=4)
-    fig.text(0.99,0.015,"F8 · AAVE · tín hiệu tham khảo",color="#5c6670",fontsize=8,ha="right")
+    fig.text(0.99,0.015,"F8 · tín hiệu tham khảo · không phải lời khuyên đầu tư",color="#5c6670",fontsize=8,ha="right")
     ax.set_title(title,color=fg,fontsize=12,loc="left",fontweight="bold")
     fig.tight_layout(); b=io.BytesIO(); fig.savefig(b,format="png",facecolor=bg); plt.close(fig); return b.getvalue()
 
@@ -213,6 +215,17 @@ def h1_posts(H,A4,vol,status,lab="1H",hs=None,tlab="4H",warn=""):
 M15_HIST=dict(n=383,win=27,IS=(0,0),OOS=(0,27),avg_win=8.0,avg_loss=-3.5,worst=0,total=-178)
 M15_WARN="\n⚠️ <b>Lưu ý:</b> kiểu này ở khung m15 backtest 2022–10/2026 <b>lỗ −178$</b> (383 lệnh, vol 200$) do phí ăn mòn. Chỉ để tham khảo/quan sát."
 # ===================== SỔ LỆNH ẢO (paper trading) =====================
+def event_posts(head,lines,G,maxphoto=8):
+    """Mỗi sự kiện có dữ liệu biểu đồ -> 1 tin ảnh; quá nhiều thì phần còn lại gộp thành 1 tin chữ."""
+    posts=[]; rest=[]
+    for k,ln in enumerate(lines):
+        if k in G and len(posts)<maxphoto:
+            try:
+                df,title,lv=G[k]; posts.append(dict(photo=chart(df,title,lv,n=120),caption=head+"\n"+ln,text=None)); continue
+            except Exception as e: print("chart lỗi:",e)
+        rest.append(ln)
+    if rest: posts.append(dict(photo=None,caption=None,text=head+"\n"+"\n".join(rest)))
+    return posts
 def paper_posts(status):
     import paper as P
     start=pd.Timestamp(os.environ.get("PAPER_START","2026-11-23"),tz="UTC").value//10**6
@@ -221,26 +234,27 @@ def paper_posts(status):
     H=P.hist("AAVEUSDT","1h",start-1100*P.MS["1h"])
     I=P.f8_ind(A,B); s4=int(np.searchsorted(A.t.values,start)); T4,eq=P.f8_book(I,s4,eq0)
     s1=int(np.searchsorted(H.t.values,start)); T1,tot1=P.h1_book(H,A,s1,vol)
-    n4,n1=len(A)-1,len(H)-1; lines=[]
+    lines=[]; G={}
     side=lambda s:"LONG" if s==1 else "SHORT"
     c4=lambda k: inw(A.tc.values[k]+1); c1=lambda k: inw(H.tc.values[k]+1)
     if True:
         for x in T4:
             if c4(x["i"]):
+                G[len(lines)]=(A,f"Lệnh ảo AAVE 4H · {side(x['s'])}",[(x['legs'][0][0],"Entry","#ffffff","-"),(x['sp0'],"SL","#ef5350","--")])
                 lines.append(f"📥 <b>4H · vào lệnh ảo {side(x['s'])}</b> tại giá mở nến kế tiếp · vol chân 1 <code>{x['bf']*x['eq0']:,.0f}$</code>"
                              +(f" · treo nhồi <code>{x['bf']*x['sig']['addr']*x['eq0']:,.0f}$</code> ở EMA100" if x['sig']['addr'] else "")+f" · SL <code>{fmt(x['sp0'])}</code>")
             for kind,j,px in x["ev"]:
                 if not c4(j) or kind=="entry": continue
+                G[len(lines)]=(A,f"Lệnh ảo AAVE 4H · {side(x['s'])}",[(x['legs'][0][0],"Entry","#ffffff","-"),(px,{"add":"Nhồi","trail":"SL mới","exit":"Thoát"}[kind],"#42a5f5" if kind=="add" else "#66bb6a" if kind=="trail" else ("#66bb6a" if x.get("pnl",0)>0 else "#ef5350"),"--")])
                 if kind=="add": lines.append(f"➕ <b>4H · khớp lệnh nhồi</b> {side(x['s'])} tại <code>{fmt(px)}</code>")
                 if kind=="trail": lines.append(f"🛡 <b>4H · đạt 1R, lệnh khỏe → gồng</b>: dời SL lên <code>{fmt(px)}</code> (+0,5R), kéo theo 2,5 ATR")
                 if kind=="exit":
                     why={"trail":"chạm SL kéo theo","early":"chốt sớm (nến đảo chiều/đóng qua EMA20)","TP":"chốt 1R","SL":"cắt lỗ (nến đóng qua SL)","hard":"chạm SL cứng"}[x["why"]]
                     lines.append(f"📤 <b>4H · đóng lệnh ảo {side(x['s'])}</b> tại <code>{fmt(px)}</code> · {why} · <b>{x['pnl']:+,.2f}$</b> ({x['pnl']/x['eq0']*100:+.2f}% vốn)")
     for x in T1:
-        if c1(x["i"]): lines.append(f"📥 <b>1H · vào lệnh ảo {side(x['s'])}</b> vol <code>{vol:,.0f}$</code> · SL <code>{fmt(x['sp'])}</code>")
-        if not x["open"] and c1(x["j"]): lines.append(f"📤 <b>1H · đóng lệnh ảo {side(x['s'])}</b> tại <code>{fmt(x['xp'])}</code> · {'chạm SL' if x['why']=='SL' else 'EMA20 cắt ngược EMA50'} · <b>{x['usd']:+,.2f}$</b>")
-    posts=[]
-    if lines: posts.append(dict(photo=None,caption=None,text="📒 <b>SỔ LỆNH ẢO</b>\n"+"\n".join(lines)))
+        if c1(x["i"]): G[len(lines)]=(H,f"Lệnh ảo AAVE 1H · {side(x['s'])}",[(x['ep'],"Entry","#ffffff","-"),(x['sp'],"SL","#ef5350","--")]); lines.append(f"📥 <b>1H · vào lệnh ảo {side(x['s'])}</b> vol <code>{vol:,.0f}$</code> · SL <code>{fmt(x['sp'])}</code>")
+        if not x["open"] and c1(x["j"]): G[len(lines)]=(H,f"Lệnh ảo AAVE 1H · đóng {side(x['s'])}",[(x['ep'],"Entry","#ffffff","-"),(x['xp'],"Thoát","#66bb6a" if x['usd']>0 else "#ef5350","--")]); lines.append(f"📤 <b>1H · đóng lệnh ảo {side(x['s'])}</b> tại <code>{fmt(x['xp'])}</code> · {'chạm SL' if x['why']=='SL' else 'EMA20 cắt ngược EMA50'} · <b>{x['usd']:+,.2f}$</b>")
+    posts=event_posts("📒 <b>SỔ LỆNH ẢO</b>",lines,G)
     if status:
         c4=[x for x in T4 if not x["open"]]; c1=[x for x in T1 if not x["open"]]
         o4=[x for x in T4 if x["open"]]; o1=[x for x in T1 if x["open"]]
@@ -317,7 +331,7 @@ if __name__=="__main__":
     try: posts+=[dict(p,ch="paper") for p in paper_posts(status)]
     except Exception as e: print("paper lỗi:",e)
     try:
-        import multi; multi.WIN=WIN; posts+=[dict(p,ch="multi") for p in multi.multi_posts(status)]
+        import multi; multi.WIN=WIN; multi.EVP=event_posts; posts+=[dict(p,ch="multi") for p in multi.multi_posts(status)]
     except Exception as e: print("multi lỗi:",e)
     for p in posts: send_post(p)
     if not posts: print("Chưa có kèo.")
