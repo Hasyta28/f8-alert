@@ -7,6 +7,7 @@ import paper as P
 P.MS.setdefault("15m",900000)
 COINS="BTC ETH SOL BNB XRP DOGE ADA AVAX LINK DOT LTC BCH TRX ATOM NEAR FIL APT ARB OP INJ SUI UNI AAVE ETC XLM HBAR TIA SEI WLD PEPE RENDER TON ICP STX FET".split()
 VN=pd.Timedelta(hours=7)
+WIN=[0,0]
 def px(x): return f"{x:,.2f}" if x>=100 else f"{x:,.4f}" if x>=1 else f"{x:.6g}"
 def books(start,vol):
     def one(coin):
@@ -30,13 +31,13 @@ def books(start,vol):
 def multi_posts(status):
     start=pd.Timestamp(os.environ.get("PAPER_START","2026-11-23"),tz="UTC").value//10**6
     vol=float(os.environ.get("VOL_MULTI","100"))
-    now=dt.datetime.now(dt.timezone.utc).timestamp()*1000; W=now//3600000*3600000   # cửa sổ: các nến đóng trong giờ vừa qua
+    w0,w1=WIN   # cửa sổ do f8_alert đặt: các nến đóng từ lần chạy trước đến giờ
     B=books(start,vol); side=lambda s:"LONG" if s==1 else "SHORT"; lines=[]
     for k in ("1h","15m"):
         for x in sorted(B[k],key=lambda x:x["t_sig"]):
-            if W-3600000<x["t_sig"]<=W:
+            if w0<x["t_sig"]<=w1:
                 lines.append(f"📥 {k.upper()} <b>{x['coin']}</b> {side(x['s'])} ~<code>{px(x['ep'])}</code> · SL <code>{px(x['sp'])}</code>")
-            if not x["open"] and W-3600000<x["t_x"]<=W:
+            if not x["open"] and w0<x["t_x"]<=w1:
                 lines.append(f"📤 {k.upper()} <b>{x['coin']}</b> {side(x['s'])} đóng <code>{px(x['xp'])}</code> · {'SL' if x['why']=='SL' else 'EMA cắt ngược'} · <b>{x['usd']:+,.2f}$</b>")
     posts=[]
     if lines: posts.append(dict(photo=None,caption=None,text=f"🗂 <b>LỆNH ẢO ĐA COIN</b> · vol {vol:,.0f}$/lệnh\n"+"\n".join(lines)))

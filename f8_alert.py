@@ -57,6 +57,20 @@ def evaluate(A,B,von=1000.0):
 import io, html
 VN=pd.Timedelta(hours=7)
 def fmt(x): return f"{x:,.2f}"
+WIN=[0,0]   # (w0,w1]: chỉ báo các nến ĐÓNG trong khoảng này (từ lần chạy thành công trước đến giờ) -> không gửi trùng
+def inw(close_ms): return WIN[0]<close_ms<=WIN[1]
+def set_window(now):
+    w0=now-15*60000
+    try:
+        rep=os.environ.get("GITHUB_REPOSITORY"); tok=os.environ.get("GITHUB_TOKEN")
+        if rep and tok:
+            u=f"https://api.github.com/repos/{rep}/actions/workflows/f8.yml/runs?status=success&per_page=1"
+            r=json.loads(urllib.request.urlopen(urllib.request.Request(u,headers={"Authorization":"Bearer "+tok,"Accept":"application/vnd.github+json"}),timeout=20).read())
+            if r.get("workflow_runs"):
+                st=r["workflow_runs"][0].get("run_started_at") or r["workflow_runs"][0]["created_at"]
+                w0=pd.Timestamp(st).value//10**6
+    except Exception as e: print("không đọc được lần chạy trước:",e)
+    WIN[0]=max(w0,now-6*3600000); WIN[1]=now
 def tvn(ms): return (pd.to_datetime(ms,unit="ms").ceil("min")+VN).strftime("%d/%m %H:%M")
 SEP="━━━━━━━━━━━━━━━━━━"
 def chart(df,title,levels,mark=None,n=90,zone=None):
@@ -199,7 +213,7 @@ def h1_posts(H,A4,vol,status,lab="1H",hs=None,tlab="4H",warn=""):
 M15_HIST=dict(n=383,win=27,IS=(0,0),OOS=(0,27),avg_win=8.0,avg_loss=-3.5,worst=0,total=-178)
 M15_WARN="\n⚠️ <b>Lưu ý:</b> kiểu này ở khung m15 backtest 2022–10/2026 <b>lỗ −178$</b> (383 lệnh, vol 200$) do phí ăn mòn. Chỉ để tham khảo/quan sát."
 # ===================== SỔ LỆNH ẢO (paper trading) =====================
-def paper_posts(fresh4,status):
+def paper_posts(status):
     import paper as P
     start=pd.Timestamp(os.environ.get("PAPER_START","2026-11-23"),tz="UTC").value//10**6
     eq0=float(os.environ.get("VON","1000")); vol=float(os.environ.get("VOL_1H","200"))
@@ -209,21 +223,22 @@ def paper_posts(fresh4,status):
     s1=int(np.searchsorted(H.t.values,start)); T1,tot1=P.h1_book(H,A,s1,vol)
     n4,n1=len(A)-1,len(H)-1; lines=[]
     side=lambda s:"LONG" if s==1 else "SHORT"
-    if fresh4:
+    c4=lambda k: inw(A.tc.values[k]+1); c1=lambda k: inw(H.tc.values[k]+1)
+    if True:
         for x in T4:
-            if x["i"]==n4:
+            if c4(x["i"]):
                 lines.append(f"📥 <b>4H · vào lệnh ảo {side(x['s'])}</b> tại giá mở nến kế tiếp · vol chân 1 <code>{x['bf']*x['eq0']:,.0f}$</code>"
                              +(f" · treo nhồi <code>{x['bf']*x['sig']['addr']*x['eq0']:,.0f}$</code> ở EMA100" if x['sig']['addr'] else "")+f" · SL <code>{fmt(x['sp0'])}</code>")
             for kind,j,px in x["ev"]:
-                if j!=n4 or kind=="entry": continue
+                if not c4(j) or kind=="entry": continue
                 if kind=="add": lines.append(f"➕ <b>4H · khớp lệnh nhồi</b> {side(x['s'])} tại <code>{fmt(px)}</code>")
                 if kind=="trail": lines.append(f"🛡 <b>4H · đạt 1R, lệnh khỏe → gồng</b>: dời SL lên <code>{fmt(px)}</code> (+0,5R), kéo theo 2,5 ATR")
                 if kind=="exit":
                     why={"trail":"chạm SL kéo theo","early":"chốt sớm (nến đảo chiều/đóng qua EMA20)","TP":"chốt 1R","SL":"cắt lỗ (nến đóng qua SL)","hard":"chạm SL cứng"}[x["why"]]
                     lines.append(f"📤 <b>4H · đóng lệnh ảo {side(x['s'])}</b> tại <code>{fmt(px)}</code> · {why} · <b>{x['pnl']:+,.2f}$</b> ({x['pnl']/x['eq0']*100:+.2f}% vốn)")
     for x in T1:
-        if x["i"]==n1: lines.append(f"📥 <b>1H · vào lệnh ảo {side(x['s'])}</b> vol <code>{vol:,.0f}$</code> · SL <code>{fmt(x['sp'])}</code>")
-        if not x["open"] and x["j"]==n1: lines.append(f"📤 <b>1H · đóng lệnh ảo {side(x['s'])}</b> tại <code>{fmt(x['xp'])}</code> · {'chạm SL' if x['why']=='SL' else 'EMA20 cắt ngược EMA50'} · <b>{x['usd']:+,.2f}$</b>")
+        if c1(x["i"]): lines.append(f"📥 <b>1H · vào lệnh ảo {side(x['s'])}</b> vol <code>{vol:,.0f}$</code> · SL <code>{fmt(x['sp'])}</code>")
+        if not x["open"] and c1(x["j"]): lines.append(f"📤 <b>1H · đóng lệnh ảo {side(x['s'])}</b> tại <code>{fmt(x['xp'])}</code> · {'chạm SL' if x['why']=='SL' else 'EMA20 cắt ngược EMA50'} · <b>{x['usd']:+,.2f}$</b>")
     posts=[]
     if lines: posts.append(dict(photo=None,caption=None,text="📒 <b>SỔ LỆNH ẢO</b>\n"+"\n".join(lines)))
     if status:
@@ -281,20 +296,28 @@ if __name__=="__main__":
         res,_=evaluate(A4,B4,von); r=[x for x in res if x["trend"]] or res; r[0]["ok"]=True
         for p in f8_posts([r[0]],A4,von,False): p["caption"]="🧪 <b>TIN MẪU – KHÔNG PHẢI KÈO THẬT</b>\n"+p["caption"]; send_post(p)
         sys.exit()
-    now=dt.datetime.now(dt.timezone.utc).timestamp()*1000
-    res,_=evaluate(A4,B4,von); fresh4=now-A4.tc.iloc[-1]<3600*1000
+    now=dt.datetime.now(dt.timezone.utc).timestamp()*1000; set_window(now)
+    status=status or inw(now//86400000*86400000)   # bản tin trạng thái mỗi ngày lúc 7h sáng VN (0h UTC)
+    print("cửa sổ:",tvn(WIN[0]),"→",tvn(WIN[1]),"| trạng thái:",status)
+    res,_=evaluate(A4,B4,von); fresh4=inw(A4.tc.iloc[-1]+1)
     posts=[dict(p,ch="4h") for p in (f8_posts(res,A4,von,status) if (fresh4 or status) else [])]
-    posts+=[dict(p,ch="1h") for p in h1_posts(H1,A4,vol1,status)]
+    def walk(L,T,ch,**kw):   # xét lần lượt từng nến đóng trong cửa sổ để không sót / không trùng kèo
+        out=[]; idx=[int(x) for x in np.where([inw(v+1) for v in L.tc.values])[0]]
+        if status and (len(L)-1) not in idx: idx.append(len(L)-1)
+        for e in sorted(idx):
+            sub=L.iloc[:e+1]; st=status and e==len(L)-1
+            ps=h1_posts(sub,T[T.tc<=sub.tc.iloc[-1]],vol1,st,**kw)
+            if not inw(sub.tc.iloc[-1]+1): ps=[p for p in ps if p.get("caption","") and "TRẠNG THÁI" in (p.get("caption") or "")]
+            out+=[dict(p,ch=ch) for p in ps]
+        return out
+    posts+=walk(H1,A4,"1h")
     try:
-        M15=klines("AAVEUSDT","15m"); W=now//3600000*3600000
-        # chạy mỗi giờ: xét lần lượt các nến m15 đóng trong giờ vừa qua để không sót kèo
-        for e in sorted(set(int(x) for x in np.where((M15.tc.values+1>W-3600000)&(M15.tc.values+1<=W))[0])):
-            sub=M15.iloc[:e+1]; posts+=[dict(p,ch="15m") for p in h1_posts(sub,H1[H1.tc<=sub.tc.iloc[-1]],vol1,status and e==len(M15)-1,lab="M15",hs=M15_HIST,tlab="1H",warn=M15_WARN)]
+        M15=klines("AAVEUSDT","15m"); posts+=walk(M15,H1,"15m",lab="M15",hs=M15_HIST,tlab="1H",warn=M15_WARN)
     except Exception as ex: print("m15 lỗi:",ex)
-    try: posts+=[dict(p,ch="paper") for p in paper_posts(fresh4,status)]
+    try: posts+=[dict(p,ch="paper") for p in paper_posts(status)]
     except Exception as e: print("paper lỗi:",e)
     try:
-        import multi; posts+=[dict(p,ch="multi") for p in multi.multi_posts(status)]
+        import multi; multi.WIN=WIN; posts+=[dict(p,ch="multi") for p in multi.multi_posts(status)]
     except Exception as e: print("multi lỗi:",e)
     for p in posts: send_post(p)
     if not posts: print("Chưa có kèo.")
