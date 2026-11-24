@@ -1,7 +1,7 @@
 name: F8 AAVE 4h
 on:
   schedule:
-    - cron: "3 * * * *"                 # mỗi giờ (repo riêng tư); khi công khai đổi thành "3,18,33,48 * * * *"
+    - cron: "3,18,33,48 * * * *"        # 3 phút sau mỗi nến m15 đóng; kèo 1h/4h và bản tin 7h sáng tự lọc theo cửa sổ thời gian, không gửi trùng
   workflow_dispatch: {}
 permissions:
   contents: read
