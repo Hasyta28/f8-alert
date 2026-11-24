@@ -16,9 +16,9 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          CHAT_4H: ${{ vars.CHAT_4H }}
-          CHAT_1H: ${{ vars.CHAT_1H }}
-          CHAT_PAPER: ${{ vars.CHAT_PAPER }}
+          CHAT_4H: ${{ vars.CHAT_4H || '-5288256918' }}
+          CHAT_1H: ${{ vars.CHAT_1H || '-5244325452' }}
+          CHAT_PAPER: ${{ vars.CHAT_PAPER || '-5523255894' }}
           PAPER_START: ${{ vars.PAPER_START || '2026-11-23' }}
           VOL_MULTI: ${{ vars.VOL_MULTI || '100' }}
           VON: ${{ vars.VON || '1000' }}
