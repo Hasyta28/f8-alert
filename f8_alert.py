@@ -57,7 +57,7 @@ def evaluate(A,B,von=1000.0):
 import io, html
 VN=pd.Timedelta(hours=7)
 def fmt(x): return f"{x:,.2f}"
-def tvn(ms): return (pd.to_datetime(ms,unit="ms")+VN).strftime("%d/%m %H:%M")
+def tvn(ms): return (pd.to_datetime(ms,unit="ms").ceil("min")+VN).strftime("%d/%m %H:%M")
 SEP="━━━━━━━━━━━━━━━━━━"
 def chart(df,title,levels,mark=None,n=90,zone=None):
     """Ảnh nến + EMA + các mức giá. levels: list (giá, nhãn, màu, kiểu)."""
@@ -71,7 +71,7 @@ def chart(df,title,levels,mark=None,n=90,zone=None):
     ax.bar(x,(d.c-d.o).abs().clip(lower=(d.h-d.l).max()*0.004),bottom=np.minimum(d.o,d.c),color=np.where(up,"#26a69a","#ef5350"),width=0.7)
     for k,col in ((20,"#f5c542"),(50,"#42a5f5"),(100,"#ab47bc"),(200,"#9e9e9e")): ax.plot(x,E[k],color=col,lw=1.3,label=f"EMA{k}")
     N=len(d); x0=N+1; x1=N+16
-    if zone: ax.axhspan(zone[0],zone[1],color="#42a5f5",alpha=0.12); ax.text(N-1,zone[1],"vùng chờ  ",color="#90caf9",fontsize=9,va="bottom",ha="right")
+    if zone: ax.axhspan(zone[0],zone[1],color="#42a5f5",alpha=0.12); ax.text(N-1,zone[1],(zone[2] if len(zone)>2 else "")+"  ",color="#90caf9",fontsize=9,va="bottom",ha="right")
     lv={lab:p for p,lab,*_ in levels}
     if "Entry" in lv and "SL" in lv:   # hộp rủi ro / mục tiêu kiểu TradingView
         ax.fill_between([x0,x1],lv["Entry"],lv["SL"],color="#ef5350",alpha=0.18,lw=0)
@@ -160,17 +160,17 @@ def h1_eval(H,A4):
         return d if d*(c[i]-sp)>0 else 0
     return dict(entry=entry,n=n,o=o,h=h,l=l,c=c,a=a,lo=lo,hi=hi,e20=e20,e50=e50,hage=hage,w=w,tc=H.tc.values)
 
-def h1_posts(H,A4,vol,status):
-    R=h1_eval(H,A4); i=R["n"]-1; posts=[]; hs=H1_HIST; t=tvn(R["tc"][i])
+def h1_posts(H,A4,vol,status,lab="1H",hs=None,tlab="4H",warn=""):
+    R=h1_eval(H,A4); i=R["n"]-1; posts=[]; hs=hs or H1_HIST; t=tvn(R["tc"][i])
     d=R["entry"](i)
     if d:
         L=d==1; sp=(R["lo"][i]-R["a"][i]) if L else (R["hi"][i]+R["a"][i]); ep=R["c"][i]; rp=abs(ep-sp)/ep
-        cap=(f"{'🟢' if L else '🔴'} <b>KÈO {'LONG' if L else 'SHORT'} · AAVE/USDT · 1H</b>  <i>(squeeze EMA)</i>\n🕒 Nến đóng {t} (giờ VN)\n{SEP}\n"
+        cap=(f"{'🟢' if L else '🔴'} <b>KÈO {'LONG' if L else 'SHORT'} · AAVE/USDT · {lab}</b>  <i>(squeeze EMA)</i>\n🕒 Nến đóng {t} (giờ VN)\n{SEP}\n"
              f"📍 <b>Entry</b>   <code>{fmt(ep)}</code>  <i>(giá mở nến kế tiếp)</i>\n🛑 <b>SL</b>        <code>{fmt(sp)}</code>  <i>(cách {rp*100:.1f}%)</i>\n"
              f"🚪 <b>Thoát</b>   khi EMA20 cắt ngược EMA50 (tool sẽ nhắn)\n💼 <b>Vol</b>       <code>{vol:,.0f}$</code> → lỗ tối đa ~<code>{vol*rp:,.1f}$</code>\n{SEP}\n"
              f"📈 Lịch sử: {hs['n']} lệnh · thắng {hs['win']}% (2025-26: {hs['OOS'][1]}%) · thắng TB +{hs['avg_win']}$ · thua TB {hs['avg_loss']}$\n"
-             f"<i>Thắng ít nhưng ăn dày: nhiều lệnh thua nhỏ là bình thường. Bạn tự quyết định.</i>")
-        img=chart(H,f"AAVE/USDT 1H · {'LONG' if L else 'SHORT'} · {t}",[(ep+(ep-sp),"1R","#66bb6a",":"),(ep,"Entry","#ffffff","-"),(sp,"SL","#ef5350","--")],mark=True,n=120)
+             f"<i>Thắng ít nhưng ăn dày: nhiều lệnh thua nhỏ là bình thường. Bạn tự quyết định.</i>"+warn)
+        img=chart(H,f"AAVE/USDT {lab} · {'LONG' if L else 'SHORT'} · {t}",[(ep+(ep-sp),"1R","#66bb6a",":"),(ep,"Entry","#ffffff","-"),(sp,"SL","#ef5350","--")],mark=True,n=120)
         posts.append(dict(photo=img,caption=cap,text=None))
     k=i-1; start=None
     while k>max(300,i-600):
@@ -184,15 +184,20 @@ def h1_posts(H,A4,vol,status):
             if hit or cross:
                 if j==i:
                     xp=sp if hit else R["c"][j]; pct=dd*(xp-ep)/ep; pnl=pct*vol
-                    posts.append(dict(photo=None,caption=None,text=(f"🚪 <b>THOÁT LỆNH {'LONG' if dd==1 else 'SHORT'} · AAVE/USDT · 1H</b>\n🕒 Nến đóng {t} (giờ VN)\n{SEP}\n"
+                    img=chart(H,f"AAVE/USDT {lab} · thoát lệnh · {t}",[(ep,"Entry","#ffffff","-"),(xp,"Thoát","#66bb6a" if pnl>0 else "#ef5350","--")],n=120)
+                    posts.append(dict(photo=img,text=None,caption=(f"🚪 <b>THOÁT LỆNH {'LONG' if dd==1 else 'SHORT'} · AAVE/USDT · {lab}</b>\n🕒 Nến đóng {t} (giờ VN)\n{SEP}\n"
                         f"Lý do: <b>{'chạm SL' if hit else 'EMA20 cắt ngược EMA50'}</b>\nVào <code>{fmt(ep)}</code> ({tvn(R['tc'][start])}) → thoát ~<code>{fmt(xp)}</code>\n"
                         f"Kết quả: <b>{pct*100:+.2f}%</b> ≈ <b>{pnl:+,.1f}$</b> với vol {vol:,.0f}$ <i>(chưa trừ phí)</i>")))
                 break
     if status and not posts:
-        posts.append(dict(photo=None,caption=None,text=f"📋 <b>TRẠNG THÁI AAVE · 1H</b> · {t}\nDải 4 EMA rộng <b>{R['w'][i]:.1f} ATR</b> (cần &lt; 1,5 trong 30 nến gần nhất) · xu hướng 4H tuổi {int(R['hage'][i])} nến.\n⏳ Chưa có kèo 1H."))
+        hi_,lo_=R["hi"][i],R["lo"][i]
+        img=chart(H,f"AAVE/USDT {lab} · trạng thái · {t}",[(hi_,"Đỉnh dải EMA","#ffb74d","--"),(lo_,"Đáy dải EMA","#ffb74d","--")],n=120,zone=(lo_,hi_))
+        posts.append(dict(photo=img,caption=f"📋 <b>TRẠNG THÁI AAVE · {lab}</b> · {t}\nDải 4 EMA rộng <b>{R['w'][i]:.1f} ATR</b> (cần &lt; 1,5 trong 30 nến gần nhất) · xu hướng {tlab} tuổi {int(R['hage'][i])} nến.\nKèo {lab} xuất hiện khi dải EMA (vùng tô) bó hẹp lại rồi 4 EMA xếp tầng cùng chiều xu hướng {tlab}.\n⏳ Chưa có kèo {lab}.",text=None))
     return posts
 
 
+M15_HIST=dict(n=383,win=27,IS=(0,0),OOS=(0,27),avg_win=8.0,avg_loss=-3.5,worst=0,total=-178)
+M15_WARN="\n⚠️ <b>Lưu ý:</b> kiểu này ở khung m15 backtest 2022–10/2026 <b>lỗ −178$</b> (383 lệnh, vol 200$) do phí ăn mòn. Chỉ để tham khảo/quan sát."
 # ===================== SỔ LỆNH ẢO (paper trading) =====================
 def paper_posts(fresh4,status):
     import paper as P
@@ -244,9 +249,11 @@ def tg(method,data,files=None):
         body+=f"--{bd}--\r\n".encode(); req=urllib.request.Request(url,data=body,headers={"Content-Type":f"multipart/form-data; boundary={bd}"})
     else: req=urllib.request.Request(url,data=urllib.parse.urlencode(data).encode())
     return json.loads(urllib.request.urlopen(req,timeout=60).read())
-CH_ENV={"4h":"CHAT_4H","1h":"CHAT_1H","paper":"CHAT_PAPER","multi":"CHAT_PAPER"}
-def chat_for(ch):   # mỗi loại tin một nhóm riêng; chưa đặt thì gửi về chat mặc định
-    return (os.environ.get(CH_ENV.get(ch,""),"") or "").strip() or os.environ.get("TELEGRAM_CHAT_ID")
+CH_ENV={"4h":"CHAT_4H","1h":"CHAT_1H","15m":"CHAT_15M","paper":"CHAT_PAPER","multi":"CHAT_PAPER"}
+def chat_for(ch):   # mỗi loại tin một nhóm riêng; chưa đặt thì gửi về chat mặc định (m15 chưa có nhóm thì vào nhóm 1h)
+    v=(os.environ.get(CH_ENV.get(ch,""),"") or "").strip()
+    if not v and ch=="15m": v=(os.environ.get("CHAT_1H","") or "").strip()
+    return v or os.environ.get("TELEGRAM_CHAT_ID")
 def send_post(p):
     tok,cid=os.environ.get("TELEGRAM_TOKEN"),chat_for(p.get("ch","4h"))
     if not (tok and cid):
@@ -278,6 +285,12 @@ if __name__=="__main__":
     res,_=evaluate(A4,B4,von); fresh4=now-A4.tc.iloc[-1]<3600*1000
     posts=[dict(p,ch="4h") for p in (f8_posts(res,A4,von,status) if (fresh4 or status) else [])]
     posts+=[dict(p,ch="1h") for p in h1_posts(H1,A4,vol1,status)]
+    try:
+        M15=klines("AAVEUSDT","15m"); W=now//3600000*3600000
+        # chạy mỗi giờ: xét lần lượt các nến m15 đóng trong giờ vừa qua để không sót kèo
+        for e in sorted(set(int(x) for x in np.where((M15.tc.values+1>W-3600000)&(M15.tc.values+1<=W))[0])):
+            sub=M15.iloc[:e+1]; posts+=[dict(p,ch="15m") for p in h1_posts(sub,H1[H1.tc<=sub.tc.iloc[-1]],vol1,status and e==len(M15)-1,lab="M15",hs=M15_HIST,tlab="1H",warn=M15_WARN)]
+    except Exception as ex: print("m15 lỗi:",ex)
     try: posts+=[dict(p,ch="paper") for p in paper_posts(fresh4,status)]
     except Exception as e: print("paper lỗi:",e)
     try:
