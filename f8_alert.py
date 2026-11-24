@@ -41,7 +41,7 @@ def evaluate(A,B,von=1000.0):
         late=[age[i]>=100, s*(e50[i]-e100[i])/a[i]>0.9, s*(c[i]-e300[i])/a[i]>5, s*(c[i]-e20[i])/a[i]<0.6]
         sc=int(sum(auto)); nl=int(sum(late))
         ep=c[i]; sp=(min(e200[i],l[i])-a[i]) if s==1 else (max(e200[i],h[i])+a[i]); d=min(abs(ep-sp)/ep,0.12); sp=ep*(1-s*d)
-        info.update(trend=trend,sig=sig,f1=f1,f2=f2,auto=sc,late=nl,age=int(age[i]),ep=ep,sp=sp,hard=ep*(1-s*1.5*d),tp=ep*(1+s*d),d=d,e100=e100[i],
+        info.update(rej=rej,i=i,trend=trend,sig=sig,f1=f1,f2=f2,auto=sc,late=nl,age=int(age[i]),ep=ep,sp=sp,hard=ep*(1-s*1.5*d),tp=ep*(1+s*d),d=d,e100=e100[i],
                     e50=e50[i],e20=e20[i],atr=a[i])
         plans=[]
         for scx in (sc,sc+1,sc+2):     # +1/+2 = nếu 1 hoặc 2 ý tự kiểm tra (Long/Short ratio <1.5, funding <0.04%) đạt
@@ -75,7 +75,7 @@ def set_window(now):
     WIN[0]=max(w0,now-6*3600000); WIN[1]=now
 def tvn(ms): return (pd.to_datetime(ms,unit="ms").ceil("min")+VN).strftime("%d/%m %H:%M")
 SEP="━━━━━━━━━━━━━━━━━━"
-def chart(df,title,levels,mark=None,n=90,zone=None):
+def chart(df,title,levels,mark=None,n=90,zone=None,circles=()):
     """Ảnh nến + EMA + các mức giá. levels: list (giá, nhãn, màu, kiểu)."""
     import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
     d=df.iloc[-n:].reset_index(drop=True); c=df.c.values
@@ -102,6 +102,18 @@ def chart(df,title,levels,mark=None,n=90,zone=None):
         yy=d.l.iloc[-1]-(d.h.max()-d.l.min())*0.03 if side_up else d.h.iloc[-1]+(d.h.max()-d.l.min())*0.03
         ax.scatter([N-1],[yy],marker="^" if side_up else "v",s=110,color="#ffffff",zorder=5)
         ax.text(N-1,yy,("\n\n" if side_up else "")+"tín hiệu"+("" if side_up else "\n\n"),color="#ffffff",fontsize=8.5,ha="center",va="top" if side_up else "bottom")
+    off=len(df)-len(d); pr=(d.h.max()-d.l.min()) or 1
+    from matplotlib.patches import Ellipse
+    for k,cc in enumerate(circles):   # khoanh vùng: dict(i0,i1 = chỉ số nến trong df, y0,y1, label, color)
+        a0,a1=cc["i0"]-off,cc["i1"]-off
+        if a1<0: continue
+        a0=max(a0,0); cx=(a0+a1)/2; cy=(cc["y0"]+cc["y1"])/2
+        wdt=(a1-a0)+3.5; hgt=abs(cc["y1"]-cc["y0"])+pr*0.06
+        col=cc.get("color","#ffeb3b")
+        ax.add_patch(Ellipse((cx,cy),wdt,hgt,fill=False,ec=col,lw=2,ls="-",zorder=6))
+        up_=cc.get("above",k%2==0); ty=cy+(hgt/2+pr*0.03)*(1 if up_ else -1)
+        ax.text(cx,ty,cc["label"],color=col,fontsize=9,fontweight="bold",ha="center",va="bottom" if up_ else "top",zorder=7,
+                bbox=dict(boxstyle="round,pad=0.2",fc=bg,ec="none",alpha=0.8))
     ax.set_xlim(-1,x1+17)
     lo=min([d.l.min()]+[p for p,*_ in levels]); hi=max([d.h.max()]+[p for p,*_ in levels])
     ax.set_ylim(lo-(hi-lo)*0.06,hi+(hi-lo)*0.08)
@@ -126,7 +138,12 @@ def f8_posts(res,A4,von,status):
              f"📊 Điểm tự động <b>{r['auto']}/5</b> · Cuối sóng <b>{r['late']}/4</b> · Tuổi xu hướng {r['age']} nến")
         lv=[(r['tp'],"1R","#66bb6a","-"),(r['ep'],"Entry","#ffffff","-"),(r['sp'],"SL","#ef5350","--"),(r['hard'],"SL cứng","#b71c1c",":")]
         if any(p and p["add"] for _,p in r["plans"]): lv.append((r['e100'],"Nhồi (EMA100)","#ffa726","-."))
-        img=chart(A4,f"AAVE/USDT 4H · {dirw} · {t}",lv,mark=True)
+        rj=r.get("rej") or []; ci=[]
+        if rj:
+            lo_=min(A4.l.values[j] for j in rj); hi_=max(A4.h.values[j] for j in rj)
+            ci.append(dict(i0=min(rj),i1=max(rj),y0=lo_,y1=hi_,label="Chạm EMA50 + rút chân",color="#ffeb3b",above=not L))
+        ii=r["i"]; ci.append(dict(i0=ii,i1=ii,y0=A4.l.values[ii],y1=A4.h.values[ii],label="Nến xác nhận",color="#00e5ff",above=L))
+        img=chart(A4,f"AAVE/USDT 4H · {dirw} · {t}",lv,mark=True,circles=ci)
         rows=[]; seen={}; seen_s={}
         for scx,p in r["plans"]:
             key=None if p is None else (p["rk"],p["add"])
@@ -186,7 +203,10 @@ def h1_posts(H,A4,vol,status,lab="1H",hs=None,tlab="4H",warn=""):
              f"🚪 <b>Thoát</b>   khi EMA20 cắt ngược EMA50 (tool sẽ nhắn)\n💼 <b>Vol</b>       <code>{vol:,.0f}$</code> → lỗ tối đa ~<code>{vol*rp:,.1f}$</code>\n{SEP}\n"
              f"📈 Lịch sử: {hs['n']} lệnh · thắng {hs['win']}% (2025-26: {hs['OOS'][1]}%) · thắng TB +{hs['avg_win']}$ · thua TB {hs['avg_loss']}$\n"
              f"<i>Thắng ít nhưng ăn dày: nhiều lệnh thua nhỏ là bình thường. Bạn tự quyết định.</i>"+warn)
-        img=chart(H,f"AAVE/USDT {lab} · {'LONG' if L else 'SHORT'} · {t}",[(ep+(ep-sp),"1R","#66bb6a",":"),(ep,"Entry","#ffffff","-"),(sp,"SL","#ef5350","--")],mark=True,n=120)
+        nb=[q for q in range(max(0,i-30),i+1) if R["w"][q]<1.5] or [i]
+        ci=[dict(i0=nb[0],i1=nb[-1],y0=min(R["lo"][q] for q in nb),y1=max(R["hi"][q] for q in nb),label="Vùng nén 4 EMA",color="#ffeb3b",above=not L),
+            dict(i0=i,i1=i,y0=R["l"][i],y1=R["h"][i],label="EMA xếp tầng → vào",color="#00e5ff",above=L)]
+        img=chart(H,f"AAVE/USDT {lab} · {'LONG' if L else 'SHORT'} · {t}",[(ep+(ep-sp),"1R","#66bb6a",":"),(ep,"Entry","#ffffff","-"),(sp,"SL","#ef5350","--")],mark=True,n=120,circles=ci)
         posts.append(dict(photo=img,caption=cap,text=None))
     k=i-1; start=None
     while k>max(300,i-600):
