@@ -2,7 +2,10 @@ name: F8 AAVE 4h
 on:
   schedule:
     - cron: "3,18,33,48 * * * *"        # 3 phút sau mỗi nến m15 đóng; kèo 1h/4h và bản tin 7h sáng tự lọc theo cửa sổ thời gian, không gửi trùng
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      mode: {description: "auto = do lịch ngoài kích chạy (không gửi bản tin trạng thái)", required: false, default: "manual"}
+concurrency: {group: f8, cancel-in-progress: false}
 permissions:
   contents: read
   actions: read
@@ -26,6 +29,6 @@ jobs:
           VOL_MULTI: ${{ vars.VOL_MULTI || '100' }}
           VON: ${{ vars.VON || '1000' }}
           VOL_1H: ${{ vars.VOL_1H || '200' }}
-          STATUS: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+          STATUS: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode != 'auto') && '1' || '0' }}
           GITHUB_TOKEN: ${{ github.token }}
         run: python f8_alert.py
