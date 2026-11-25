@@ -18,7 +18,7 @@ def books(start,vol):
             out={}
             for k,(L,Tr) in {"1h":(H1,H4),"15m":(M,H1)}.items():
                 if len(L)<400 or len(Tr)<300: continue
-                T,_=P.h1_book(L,Tr,int(np.searchsorted(L.t.values,start)),vol)
+                T,_=P.h1_book(L,Tr,int(np.searchsorted(L.t.values,start)),vol,hl=(k=="15m"))
                 for x in T:
                     x["coin"]=coin; x["t_sig"]=L.t.values[x["i"]]+P.MS[k]; x["t_x"]=L.t.values[x["j"]]+P.MS[k]; x["last"]=L.c.values[-1]
                 out[k]=T; out[k+"_df"]=L
@@ -49,7 +49,7 @@ def multi_posts(status):
     posts=EVP(head,lines,G) if EVP else ([dict(photo=None,caption=None,text=head+"\n"+"\n".join(lines))] if lines else [])
     if status:
         txt=f"🗂 <b>SỔ ẢO ĐA COIN</b> · {len(COINS)} coin · từ {(pd.to_datetime(start,unit='ms')+VN).strftime('%d/%m/%Y')} · vol {vol:,.0f}$/lệnh\n━━━━━━━━━━━━━━━━━━"
-        for k,lab in (("1h","1H squeeze (backtest có lãi)"),("15m","M15 squeeze (backtest lỗ – chỉ quan sát)")):
+        for k,lab in (("1h","1H squeeze (backtest có lãi)"),("15m","M15 squeeze + lọc cấu trúc (backtest lãi mỏng)")):
             T=B[k]; c=[x for x in T if not x["open"]]; o=[x for x in T if x["open"] and not x.get("pending")]
             tot=sum(x["usd"] for x in c); fl=sum(x["usd"] for x in o)
             best=pd.Series({}, dtype=float) if not c else pd.DataFrame(c).groupby("coin").usd.sum().sort_values()

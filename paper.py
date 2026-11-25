@@ -105,7 +105,7 @@ def f8_book(I,start_i,eq0=1000.0):
     return T,eq
 
 # ---------------- 1h squeeze ----------------
-def h1_book(H,A4,start_i,vol=200.0):
+def h1_book(H,A4,start_i,vol=200.0,hl=False):
     o,h,l,c=(H[x].values for x in "ohlc"); a=atr(h,l,c); n=len(c)
     e20,e50,e100,e200=(ema(c,k) for k in (20,50,100,200)); EM=np.vstack([e20,e50,e100,e200])
     hi,lo=EM.max(0),EM.min(0); w=(hi-lo)/a; nar=pd.Series(w<1.5).rolling(30).max().values
@@ -120,6 +120,7 @@ def h1_book(H,A4,start_i,vol=200.0):
     while i<n:
         d=1 if (up[i] and not up[i-1]) else -1 if (dn[i] and not dn[i-1]) else 0
         if d==0 or nar[i]!=1 or htr[i]!=d or hage[i]>=100: i+=1; continue
+        if hl and not ((l[i-15:i+1].min()>l[i-30:i-15].min()) if d==1 else (h[i-15:i+1].max()>h[i-30:i-15].max())): i+=1; continue
         sp=(lo[i]-a[i]) if d==1 else (hi[i]+a[i])
         if i==n-1:   # tín hiệu ở nến vừa đóng: vào ở giá mở nến kế tiếp (≈ giá đóng hiện tại)
             if d*(c[i]-sp)>0: T.append(dict(i=i,s=d,ep=c[i],sp=sp,open=True,pending=True,j=i,usd=0.0))

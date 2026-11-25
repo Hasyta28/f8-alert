@@ -175,7 +175,7 @@ def f8_posts(res,A4,von,status):
 # (EMA50>EMA100 và EMA100 dốc lên 10 nến, ngược lại cho short), xu hướng 4h dưới 100 nến. Vào ở giá mở nến 1h kế tiếp.
 # SL = mép dải EMA ∓ 1 ATR(1h). Thoát khi EMA20 cắt ngược EMA50 (nến 1h đóng). Vol cố định (mặc định 200$).
 H1_HIST=dict(n=101,win=42,IS=(63,35),OOS=(38,53),avg_win=16.6,avg_loss=-6.7,worst=-17.9,total=301)
-def h1_eval(H,A4):
+def h1_eval(H,A4,hl=False):
     o,h,l,c=(H[x].values for x in "ohlc"); a=atr(h,l,c); n=len(c)
     e20,e50,e100,e200=(ema(c,k) for k in (20,50,100,200)); EM=np.vstack([e20,e50,e100,e200])
     hi,lo=EM.max(0),EM.min(0); w=(hi-lo)/a; nar=pd.Series(w<1.5).rolling(30).max().values
@@ -189,12 +189,13 @@ def h1_eval(H,A4):
     def entry(i):
         d=1 if (up[i] and not up[i-1]) else -1 if (dn[i] and not dn[i-1]) else 0
         if d==0 or nar[i]!=1 or htr[i]!=d or hage[i]>=100: return 0
+        if hl and not ((l[i-15:i+1].min()>l[i-30:i-15].min()) if d==1 else (h[i-15:i+1].max()>h[i-30:i-15].max())): return 0   # m15: long cần đáy sau cao hơn đáy trước trong vùng nén; short cần đỉnh sau vượt đỉnh trước (quét đỉnh rồi gãy)
         sp=(lo[i]-a[i]) if d==1 else (hi[i]+a[i])
         return d if d*(c[i]-sp)>0 else 0
     return dict(entry=entry,n=n,o=o,h=h,l=l,c=c,a=a,lo=lo,hi=hi,e20=e20,e50=e50,hage=hage,w=w,tc=H.tc.values)
 
-def h1_posts(H,A4,vol,status,lab="1H",hs=None,tlab="4H",warn=""):
-    R=h1_eval(H,A4); i=R["n"]-1; posts=[]; hs=hs or H1_HIST; t=tvn(R["tc"][i])
+def h1_posts(H,A4,vol,status,lab="1H",hs=None,tlab="4H",warn="",hl=False):
+    R=h1_eval(H,A4,hl); i=R["n"]-1; posts=[]; hs=hs or H1_HIST; t=tvn(R["tc"][i])
     d=R["entry"](i)
     if d:
         L=d==1; sp=(R["lo"][i]-R["a"][i]) if L else (R["hi"][i]+R["a"][i]); ep=R["c"][i]; rp=abs(ep-sp)/ep
@@ -232,8 +233,8 @@ def h1_posts(H,A4,vol,status,lab="1H",hs=None,tlab="4H",warn=""):
     return posts
 
 
-M15_HIST=dict(n=383,win=27,IS=(0,0),OOS=(0,27),avg_win=8.0,avg_loss=-3.5,worst=0,total=-178)
-M15_WARN="\n⚠️ <b>Lưu ý:</b> kiểu này ở khung m15 backtest 2022–10/2026 <b>lỗ −178$</b> (383 lệnh, vol 200$) do phí ăn mòn. Chỉ để tham khảo/quan sát."
+M15_HIST=dict(n=182,win=27,IS=(0,0),OOS=(0,28),avg_win=8.9,avg_loss=-3.6,worst=0,total=-25)
+M15_WARN="\n⚠️ <b>Lưu ý:</b> m15 có thêm lọc cấu trúc vùng nén (long: đáy sau cao hơn; short: vừa quét qua đỉnh trước). 35 coin 2022–10/2026: lãi mỏng +981$/5.631 lệnh (~0,09%/lệnh); riêng AAVE ≈ hòa (−25$/182 lệnh). Chỉ tham khảo."
 # ===================== SỔ LỆNH ẢO (paper trading) =====================
 def event_posts(head,lines,G,maxphoto=8):
     """Mỗi sự kiện có dữ liệu biểu đồ -> 1 tin ảnh; quá nhiều thì phần còn lại gộp thành 1 tin chữ."""
@@ -346,7 +347,7 @@ if __name__=="__main__":
         return out
     posts+=walk(H1,A4,"1h")
     try:
-        M15=klines("AAVEUSDT","15m"); posts+=walk(M15,H1,"15m",lab="M15",hs=M15_HIST,tlab="1H",warn=M15_WARN)
+        M15=klines("AAVEUSDT","15m"); posts+=walk(M15,H1,"15m",lab="M15",hs=M15_HIST,tlab="1H",warn=M15_WARN,hl=True)
     except Exception as ex: print("m15 lỗi:",ex)
     try: posts+=[dict(p,ch="paper") for p in paper_posts(status)]
     except Exception as e: print("paper lỗi:",e)
